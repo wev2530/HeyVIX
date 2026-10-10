@@ -32,12 +32,15 @@ class MainActivity : Activity() {
     private lateinit var conversationScroll: ScrollView
     private lateinit var input: EditText
     private lateinit var micButton: Button
+
     private lateinit var commandRouter: LocalCommandRouter
     private lateinit var voiceController: VoiceController
     private lateinit var speechOutput: VixSpeechOutput
+    private lateinit var aiApiClient: AiApiClient
 
     private var pendingCommand: String? = null
     private var listening = false
+    private var requestInProgress = false
 
     companion object {
         private const val MICROPHONE_PERMISSION_REQUEST = 1001
@@ -51,6 +54,7 @@ class MainActivity : Activity() {
         window.navigationBarColor = backgroundColor
 
         commandRouter = LocalCommandRouter(this)
+        aiApiClient = AiApiClient(this)
 
         buildInterface()
         setupVoice()
@@ -63,7 +67,7 @@ class MainActivity : Activity() {
             setBackgroundColor(backgroundColor)
         }
 
-        // Header and branding
+        // VIX branding
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -72,7 +76,7 @@ class MainActivity : Activity() {
         val logo = ImageView(this).apply {
             setImageResource(R.drawable.vix_logo_lockup_dark)
             scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "Vix AI logo"
+            contentDescription = "VIX AI logo"
             adjustViewBounds = true
         }
 
@@ -94,7 +98,7 @@ class MainActivity : Activity() {
         )
 
         val readyLabel = TextView(this).apply {
-            text = "READY"
+            text = "VIX AI"
             textSize = 10f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER_VERTICAL
@@ -110,7 +114,6 @@ class MainActivity : Activity() {
             )
         )
 
-        // Status indicator
         status = TextView(this).apply {
             text = "YOUR PERSONAL ASSISTANT"
             textSize = 11f
@@ -122,7 +125,7 @@ class MainActivity : Activity() {
 
         root.addView(status)
 
-        // Conversation area
+        // Conversation history
         conversation = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(2), dp(8), dp(2), dp(12))
@@ -144,8 +147,8 @@ class MainActivity : Activity() {
         )
 
         addMessage(
-            "Hi, I'm Vix AI. What would you like me to do? " +
-                "You can type a message or tap the microphone.",
+            "Hi, I'm VIX AI. Ask me a question, request coding help, " +
+                "or use a supported phone command.",
             false
         )
 
@@ -160,7 +163,7 @@ class MainActivity : Activity() {
         }
 
         input = EditText(this).apply {
-            hint = "Message Vix AI..."
+            hint = "Message VIX AI..."
             textSize = 15f
             setTextColor(textColor)
             setHintTextColor(mutedColor)
@@ -172,10 +175,14 @@ class MainActivity : Activity() {
 
         composer.addView(
             input,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            )
         )
 
-        // Small microphone beside the input
+        // Inline microphone
         micButton = Button(this).apply {
             text = "🎙"
             textSize = 18f
@@ -184,14 +191,17 @@ class MainActivity : Activity() {
             minWidth = 0
             minimumWidth = 0
             setPadding(0, 0, 0, 0)
-            background = roundedBackground(Color.rgb(48, 48, 58), 14)
-            contentDescription = "Speak to Vix AI"
+            background = roundedBackground(
+                Color.rgb(48, 48, 58),
+                14
+            )
+            contentDescription = "Speak to VIX AI"
 
             setOnClickListener {
                 if (listening) {
                     voiceController.stop()
                     listening = false
-                    micButton.text = "🎙"
+                    text = "🎙"
                     status.text = "YOUR PERSONAL ASSISTANT"
                 } else {
                     startVoiceInput()
@@ -240,9 +250,8 @@ class MainActivity : Activity() {
             }
         )
 
-        // Footer
         val footer = TextView(this).apply {
-            text = "VIX AI  •  PRIVATE PHONE ASSISTANT"
+            text = "VIX AI • PRIVATE PHONE ASSISTANT"
             textSize = 9f
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
@@ -312,11 +321,15 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun addMessage(message: String, fromUser: Boolean) {
+    private fun addMessage(
+        message: String,
+        fromUser: Boolean
+    ) {
         val bubble = TextView(this).apply {
             text = message
             textSize = 15f
             setTextColor(textColor)
+            setTextIsSelectable(true)
             setPadding(dp(14), dp(11), dp(14), dp(11))
             background = roundedBackground(
                 if (fromUser) userBubbleColor else panelColor,
@@ -331,7 +344,11 @@ class MainActivity : Activity() {
 
             addView(
                 bubble,
-                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.88f)
+                LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    0.88f
+                )
             )
         }
 
@@ -349,6 +366,15 @@ class MainActivity : Activity() {
             Toast.makeText(
                 this,
                 "Type a message first.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        if (requestInProgress) {
+            Toast.makeText(
+                this,
+                "Please wait for the current reply.",
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -378,7 +404,12 @@ class MainActivity : Activity() {
                 override fun onFinal(text: String) {
                     listening = false
                     micButton.text = "🎙"
-                    input.setText(text)
+
+                    if (text.isBlank()) {
+                        status.text = "YOUR PERSONAL ASSISTANT"
+                        return
+                    }
+
                     addMessage(text, true)
                     handleCommand(text)
                 }
@@ -402,12 +433,25 @@ class MainActivity : Activity() {
                 }
             },
             { message ->
-                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    message,
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         )
     }
 
     private fun startVoiceInput() {
+        if (requestInProgress) {
+            Toast.makeText(
+                this,
+                "Please wait for the current reply.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
         if (
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
@@ -426,39 +470,60 @@ class MainActivity : Activity() {
     private fun handleCommand(rawCommand: String) {
         status.text = "WORKING…"
 
-        val result = commandRouter.handle(rawCommand)
+        // Execute recognized local commands without sending them to the AI.
+        val localResult = commandRouter.handle(rawCommand)
 
-        if (!result.handled) {
-            addMessage(
-                "I don't have an online AI connection active yet. " +
-                    "Local phone commands are ready; general questions will work " +
-                    "once the Vix AI API is connected.",
-                false
-            )
+        if (localResult.handled) {
+            if (
+                localResult.needsCameraPermission &&
+                checkSelfPermission(Manifest.permission.CAMERA) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                pendingCommand = rawCommand
 
-            status.text = "VIX AI CONNECTION PENDING"
-            return
-        }
+                requestPermissions(
+                    arrayOf(Manifest.permission.CAMERA),
+                    CAMERA_PERMISSION_REQUEST
+                )
+                return
+            }
 
-        if (
-            result.needsCameraPermission &&
-            checkSelfPermission(Manifest.permission.CAMERA) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            pendingCommand = rawCommand
-            requestPermissions(
-                arrayOf(Manifest.permission.CAMERA),
-                CAMERA_PERMISSION_REQUEST
+            showReply(
+                localResult.message,
+                localResult.successful
             )
             return
         }
 
-        showReply(result.message, result.successful)
+        // Send general questions to the configured VIX AI API.
+        requestInProgress = true
+        status.text = "CONTACTING VIX AI…"
+
+        aiApiClient.sendMessage(rawCommand) { aiResult ->
+            if (isFinishing || isDestroyed) {
+                return@sendMessage
+            }
+
+            requestInProgress = false
+
+            showReply(
+                aiResult.message,
+                aiResult.successful
+            )
+        }
     }
 
-    private fun showReply(message: String, speak: Boolean) {
+    private fun showReply(
+        message: String,
+        speak: Boolean
+    ) {
         addMessage(message, false)
-        status.text = if (speak) "DONE" else "NEEDS ATTENTION"
+
+        status.text = if (speak) {
+            "DONE"
+        } else {
+            "NEEDS ATTENTION"
+        }
 
         if (speak) {
             speechOutput.speak(message)
@@ -506,7 +571,8 @@ class MainActivity : Activity() {
                     handleCommand(command)
                 } else {
                     showReply(
-                        "Camera permission was denied. Allow it in Settings to use the flashlight.",
+                        "Camera permission was denied. " +
+                            "Allow it in Settings if the requested command needs it.",
                         false
                     )
                 }
@@ -523,11 +589,17 @@ class MainActivity : Activity() {
             speechOutput.shutdown()
         }
 
+        if (::aiApiClient.isInitialized) {
+            aiApiClient.close()
+        }
+
         super.onDestroy()
     }
 
     private fun dp(value: Int): Int {
-        return (value * resources.displayMetrics.density).toInt()
+        return (
+            value * resources.displayMetrics.density
+        ).toInt()
     }
 
     private fun roundedBackground(
