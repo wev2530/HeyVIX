@@ -1,17 +1,17 @@
 {
-  "provider": "huggingface_space",
-  "display_name": "VIX AI",
-  "base_url": "https://qwen-qwen3-coder-webdev.hf.space",
-  "endpoint": "/run/generate_code",
-  "enabled": true,
-  "timeout_seconds": 90,
-  "request_fields": {
-    "message": "input_value",
-    "system_prompt": "system_prompt_input_value"
-  },
-  "response_fields": [
-    "output",
-    "output_1"
-  ],
-  "system_prompt": "You are VIX AI, a helpful personal AI assistant. Answer clearly and accurately. Help with software development, debugging, engineering, mathematics, general questions, and other tasks within your capabilities. Do not claim to have executed code, accessed the user's phone, or completed an action unless that actually happened. For phone operations, return a clear explanation or supported action request for the Android app to handle."
+"provider": "huggingface_space",
+"display_name": "VIX AI",
+"base_url": "https://qwen-qwen3-coder-webdev.hf.space",
+"endpoint": "/gradio_api/run/generate_code",
+"enabled": true,
+"timeout_seconds": 90,
+"request_fields": {
+"message": "input_value",
+"system_prompt": "system_prompt_input_value"
+},
+"response_fields": [
+"output",
+"output_1"
+],
+"system_prompt": "You are VIX AI, a helpful personal AI assistant. Answer clearly, accurately, and naturally. Help with software development, debugging, engineering, mathematics, general questions, and other tasks within your capabilities. For coding tasks, provide correct, practical, well-explained solutions. Do not claim to have executed code, accessed the user's phone, or completed an action unless that actually happened. For phone operations, explain the action or return a supported action request for the Android app to handle."
 }
