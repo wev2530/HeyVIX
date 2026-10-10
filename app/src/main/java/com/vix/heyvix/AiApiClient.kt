@@ -1,4 +1,3 @@
-
 package com.vix.heyvix
 
 import android.content.Context
@@ -8,306 +7,204 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.io.OutputStreamWriter
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/**
- * Sends text messages to the AI endpoint configured in assets/ai_config.json.
- *
- * Network work runs on a background thread. Results are delivered on the
- * Android main thread so the UI can safely display them.
- */
 class AiApiClient(context: Context) {
 
-    data class Result(
-        val successful: Boolean,
-        val message: String
-    )
+data class Result(
+    val successful: Boolean,
+    val message: String
+)
 
-    private val appContext = context.applicationContext
-    private val executor = Executors.newSingleThreadExecutor()
-    private val mainHandler = Handler(Looper.getMainLooper())
+private val appContext = context.applicationContext
+private val mainHandler = Handler(Looper.getMainLooper())
+private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
-    @Volatile
-    private var closed = false
-
-    /**
-     * Sends a message to the configured AI service.
-     */
-    fun sendMessage(
-        message: String,
-        callback: (Result) -> Unit
-    ) {
-        val cleanMessage = message.trim()
-
-        if (cleanMessage.isEmpty()) {
-            callbackOnMain(
-                callback,
-                Result(false, "Please enter a message first.")
-            )
-            return
-        }
-
-        if (closed) {
-            callbackOnMain(
-                callback,
-                Result(false, "The VIX AI connection is unavailable.")
-            )
-            return
-        }
-
-        executor.execute {
-            val result = try {
-                performRequest(cleanMessage)
-            } catch (exception: Exception) {
-                Result(
-                    false,
-                    "Couldn't connect to VIX AI: " +
-                        (exception.message ?: "Unknown network error.")
-                )
-            }
-
-            callbackOnMain(callback, result)
-        }
+private val config: JSONObject by lazy {
+    appContext.assets.open("ai_config.json").bufferedReader().use {
+        JSONObject(it.readText())
     }
+}
 
-    private fun performRequest(message: String): Result {
-        val configText = appContext.assets
-            .open("ai_config.json")
-            .bufferedReader()
-            .use { it.readText() }
-
-        val config = JSONObject(configText)
-
-        if (!config.optBoolean("enabled", false)) {
-            return Result(false, "The VIX AI connection is disabled.")
-        }
-
-        val baseUrl = config.optString("base_url").trimEnd('/')
-        val endpoint = config.optString("endpoint")
-        val timeoutSeconds = config.optInt("timeout_seconds", 90)
-            .coerceIn(10, 180)
-
-        if (
-            baseUrl.isBlank() ||
-            endpoint.isBlank() ||
-            !baseUrl.startsWith("https://")
-        ) {
-            return Result(
+fun sendMessage(
+    message: String,
+    callback: (Result) -> Unit
+) {
+    executor.execute {
+        val result = try {
+            sendRequest(message)
+        } catch (e: Exception) {
+            Result(
                 false,
-                "The VIX AI API configuration is invalid. " +
-                    "Check the base URL and endpoint."
+                "VIX AI connection error: ${e.message ?: "Unknown error"}"
             )
         }
 
-        val requestFields = config.optJSONObject("request_fields")
-            ?: JSONObject()
-
-        val messageField = requestFields.optString(
-            "message",
-            "input_value"
-        )
-
-        val promptField = requestFields.optString(
-            "system_prompt",
-            "system_prompt_input_value"
-        )
-
-        val requestBody = JSONObject().apply {
-            put(messageField, message)
-            put(
-                promptField,
-                config.optString("system_prompt", "You are VIX AI.")
-            )
-        }
-
-        val connection = (URL(baseUrl + endpoint)
-            .openConnection() as HttpURLConnection)
-
-        try {
-            connection.requestMethod = "POST"
-            connection.connectTimeout = timeoutSeconds * 1000
-            connection.readTimeout = timeoutSeconds * 1000
-            connection.doOutput = true
-            connection.setRequestProperty(
-                "Content-Type",
-                "application/json; charset=UTF-8"
-            )
-            connection.setRequestProperty(
-                "Accept",
-                "application/json"
-            )
-
-            OutputStreamWriter(
-                connection.outputStream,
-                StandardCharsets.UTF_8
-            ).use { writer ->
-                writer.write(requestBody.toString())
-                writer.flush()
-            }
-
-            val statusCode = connection.responseCode
-            val responseStream = if (statusCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            }
-
-            val responseText = responseStream?.let { stream ->
-                BufferedReader(
-                    InputStreamReader(stream, StandardCharsets.UTF_8)
-                ).use { reader ->
-                    reader.readText()
-                }
-            }.orEmpty()
-
-            if (statusCode !in 200..299) {
-                return Result(
-                    false,
-                    "VIX AI server returned HTTP $statusCode. " +
-                        explainHttpError(statusCode, responseText)
-                )
-            }
-
-            val answer = extractAnswer(responseText, config)
-
-            return if (answer.isBlank()) {
-                Result(
-                    false,
-                    "The VIX AI server responded, but no answer was found. " +
-                        "The API response format may need to be adjusted."
-                )
-            } else {
-                Result(true, answer)
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun extractAnswer(
-        responseText: String,
-        config: JSONObject
-    ): String {
-        if (responseText.isBlank()) return ""
-
-        val json = try {
-            JSONObject(responseText)
-        } catch (_: Exception) {
-            null
-        }
-
-        if (json == null) {
-            return responseText.trim()
-        }
-
-        val configuredFields = config.optJSONArray("response_fields")
-            ?: JSONArray().apply {
-                put("output")
-                put("output_1")
-            }
-
-        // Prefer the response fields specified in the configuration.
-        for (index in 0 until configuredFields.length()) {
-            val field = configuredFields.optString(index)
-            val value = findText(json, field)
-
-            if (value.isNotBlank()) {
-                return value
-            }
-        }
-
-        // Handle common Gradio responses such as {"data":["answer"]}.
-        val data = json.optJSONArray("data")
-        if (data != null) {
-            for (index in 0 until data.length()) {
-                val value = data.opt(index)
-                if (value is String && value.isNotBlank()) {
-                    return value.trim()
-                }
-            }
-        }
-
-        // Handle common alternative response formats.
-        for (field in listOf("response", "answer", "text", "message")) {
-            val value = findText(json, field)
-            if (value.isNotBlank()) {
-                return value
-            }
-        }
-
-        val detail = json.optString("detail")
-        if (detail.isNotBlank()) {
-            return ""
-        }
-
-        return ""
-    }
-
-    private fun findText(
-        json: JSONObject,
-        field: String
-    ): String {
-        val directValue = json.opt(field)
-
-        if (directValue is String && directValue.isNotBlank()) {
-            return directValue.trim()
-        }
-
-        if (directValue is JSONObject) {
-            val nested = findText(
-                directValue,
-                "text"
-            )
-            if (nested.isNotBlank()) return nested
-
-            val nestedOutput = findText(
-                directValue,
-                "output"
-            )
-            if (nestedOutput.isNotBlank()) return nestedOutput
-        }
-
-        return ""
-    }
-
-    private fun explainHttpError(
-        statusCode: Int,
-        responseText: String
-    ): String {
-        return when (statusCode) {
-            401, 403 ->
-                "The service may require authentication or may not allow this request."
-            404 ->
-                "The configured endpoint was not found. Verify the API route."
-            429 ->
-                "The service is rate-limiting requests. Try again later."
-            500, 502, 503, 504 ->
-                "The AI service may be starting, busy, or experiencing an error."
-            else ->
-                responseText.take(250).ifBlank {
-                    "Check the API configuration and service status."
-                }
-        }
-    }
-
-    private fun callbackOnMain(
-        callback: (Result) -> Unit,
-        result: Result
-    ) {
         mainHandler.post {
             callback(result)
         }
     }
+}
 
-    /**
-     * Call when the owning screen no longer needs this client.
-     */
-    fun close() {
-        closed = true
-        executor.shutdownNow()
+private fun sendRequest(message: String): Result {
+    val baseUrl = config.getString("base_url").trimEnd('/')
+    val endpoint = config.getString("endpoint")
+    val timeout = config.optInt("timeout_seconds", 90) * 1000
+
+    val systemPrompt = config.optString(
+        "system_prompt",
+        "You are VIX AI, a helpful AI assistant."
+    )
+
+    val url = URL("$baseUrl/${
+        endpoint.trimStart('/')
+    }")
+
+    val connection = url.openConnection() as HttpURLConnection
+
+    try {
+        connection.requestMethod = "POST"
+        connection.connectTimeout = 20000
+        connection.readTimeout = timeout
+        connection.doOutput = true
+        connection.setRequestProperty(
+            "Content-Type",
+            "application/json"
+        )
+        connection.setRequestProperty(
+            "Accept",
+            "application/json"
+        )
+
+        /*
+         * Gradio API expects the inputs inside a "data" array.
+         * This supplies:
+         * data[0] = user message
+         * data[1] = system prompt
+         */
+        val inputs = JSONArray()
+            .put(message)
+            .put(systemPrompt)
+
+        val requestBody = JSONObject()
+            .put("data", inputs)
+
+        val bytes = requestBody.toString()
+            .toByteArray(StandardCharsets.UTF_8)
+
+        connection.setFixedLengthStreamingMode(bytes.size)
+
+        connection.outputStream.use { output: OutputStream ->
+            output.write(bytes)
+            output.flush()
+        }
+
+        val statusCode = connection.responseCode
+
+        val responseStream = if (statusCode in 200..299) {
+            connection.inputStream
+        } else {
+            connection.errorStream
+        }
+
+        val responseText = responseStream?.use { stream ->
+            BufferedReader(
+                InputStreamReader(stream, StandardCharsets.UTF_8)
+            ).readText()
+        }.orEmpty()
+
+        if (statusCode !in 200..299) {
+            return Result(
+                false,
+                "VIX AI server returned HTTP $statusCode. $responseText"
+            )
+        }
+
+        val responseJson = JSONObject(responseText)
+
+        val output = extractText(responseJson)
+
+        if (output.isBlank()) {
+            return Result(
+                false,
+                "VIX AI returned an empty response. Raw response: $responseText"
+            )
+        }
+
+        return Result(true, output)
+    } finally {
+        connection.disconnect()
     }
+}
+
+private fun extractText(json: JSONObject): String {
+    val directFields = listOf(
+        "output",
+        "output_1",
+        "response",
+        "answer",
+        "text",
+        "message"
+    )
+
+    for (field in directFields) {
+        val value = json.opt(field)
+
+        if (value is String && value.isNotBlank()) {
+            return value
+        }
+
+        if (value is JSONObject) {
+            val nested = extractText(value)
+            if (nested.isNotBlank()) return nested
+        }
+
+        if (value is JSONArray) {
+            val nested = extractArrayText(value)
+            if (nested.isNotBlank()) return nested
+        }
+    }
+
+    val data = json.optJSONArray("data")
+    if (data != null) {
+        val text = extractArrayText(data)
+        if (text.isNotBlank()) return text
+    }
+
+    return ""
+}
+
+private fun extractArrayText(array: JSONArray): String {
+    val pieces = mutableListOf<String>()
+
+    for (index in 0 until array.length()) {
+        when (val item = array.opt(index)) {
+            is String -> {
+                if (item.isNotBlank()) pieces.add(item)
+            }
+
+            is JSONObject -> {
+                val nested = extractText(item)
+                if (nested.isNotBlank()) pieces.add(nested)
+            }
+
+            is JSONArray -> {
+                val nested = extractArrayText(item)
+                if (nested.isNotBlank()) pieces.add(nested)
+            }
+        }
+    }
+
+    return pieces.joinToString("\n").trim()
+}
+
+fun close() {
+    executor.shutdownNow()
+}
+
 }
