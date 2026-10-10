@@ -1,25 +1,42 @@
+<escape><?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+<!-- Internet access for VIX AI and Firebase -->
+<uses-permission android:name="android.permission.INTERNET" />
 
-    <application
-        android:allowBackup="true"
-        android:label="VIX"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
-        android:usesCleartextTraffic="false">
+<!-- Voice input -->
+<uses-permission android:name="android.permission.RECORD_AUDIO" />
 
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
+<!-- Flashlight control; Android will ask for permission at runtime -->
+<uses-permission android:name="android.permission.CAMERA" />
 
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
+<!-- Allow VIX to discover installed launcher apps -->
+<queries>
+    <intent>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+    </intent>
+</queries>
 
-        </activity>
-    </application>
-</manifest>
+<application
+    android:allowBackup="true"
+    android:label="VIX"
+    android:icon="@mipmap/ic_launcher"
+    android:roundIcon="@mipmap/ic_launcher"
+    android:theme="@android:style/Theme.Material.Light.NoActionBar"
+    android:usesCleartextTraffic="false">
+
+    <activity
+        android:name=".MainActivity"
+        android:exported="true">
+
+        <intent-filter>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent-filter>
+
+    </activity>
+
+</application>
+
+</manifest></escape>
