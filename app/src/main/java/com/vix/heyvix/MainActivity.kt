@@ -4,12 +4,15 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
@@ -51,11 +54,18 @@ class MainActivity : Activity() {
     // Screenshot / screen recording waiting for Android's permission dialog.
     private var pendingScreenAction: ScreenCaptureController.Action? = null
 
+    // Wake word ("Hey VIX") toggle.
+    private lateinit var wakeButton: Button
+    private var wakeNotifAsked = false
+
     companion object {
         private const val MICROPHONE_PERMISSION_REQUEST = 1001
         private const val CAMERA_PERMISSION_REQUEST = 1002
         private const val SCREEN_CAPTURE_REQUEST = 1003
         private const val NOTIFICATION_PERMISSION_REQUEST = 1004
+        private const val WAKE_MIC_REQUEST = 1005
+        private const val WAKE_NOTIF_REQUEST = 1006
+        private const val WAKE_OVERLAY_REQUEST = 1007
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,6 +79,10 @@ class MainActivity : Activity() {
 
         buildInterface()
         setupVoice()
+
+        updateWakeButton()
+        restoreWakeService()
+        handleWakeIntent(intent)
     }
 
     private fun buildInterface() {
@@ -135,6 +149,22 @@ class MainActivity : Activity() {
         }
 
         root.addView(status)
+
+        wakeButton = Button(this).apply {
+            isAllCaps = false
+            textSize = 11f
+            setPadding(dp(10), 0, dp(10), 0)
+            background = roundedBackground(panelColor, 16)
+            setOnClickListener { toggleWake() }
+        }
+
+        root.addView(
+            wakeButton,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(38)
+            ).apply { bottomMargin = dp(6) }
+        )
 
         // Conversation history
         conversation = LinearLayout(this).apply {
@@ -624,6 +654,25 @@ class MainActivity : Activity() {
                 }
             }
 
+            WAKE_MIC_REQUEST -> {
+                if (
+                    grantResults.isNotEmpty() &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED
+                ) {
+                    continueWakeSetup()
+                } else {
+                    showReply(
+                        "The wake word needs the microphone. It stays off.",
+                        false
+                    )
+                }
+            }
+
+            WAKE_NOTIF_REQUEST -> {
+                // Notifications are optional; carry on either way.
+                continueWakeSetup()
+            }
+
             NOTIFICATION_PERMISSION_REQUEST -> {
                 // The capture works even if notifications are denied.
                 if (pendingScreenAction != null) {
@@ -649,6 +698,162 @@ class MainActivity : Activity() {
                     )
                 }
             }
+        }
+    }
+
+    // ----------------------------------------------------------
+    // Wake word ("Hey VIX", "Hi VIX", "Hello VIX")
+    // ----------------------------------------------------------
+
+    override fun onStart() {
+        super.onStart()
+        WakeWordService.setUiVisible(true)
+    }
+
+    override fun onStop() {
+        WakeWordService.setUiVisible(false)
+        super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWakeIntent(intent)
+    }
+
+    private fun handleWakeIntent(intent: Intent?) {
+        if (
+            intent == null ||
+            !intent.getBooleanExtra(WakeWordService.EXTRA_WAKE, false)
+        ) {
+            return
+        }
+
+        val command = intent
+            .getStringExtra(WakeWordService.EXTRA_WAKE_COMMAND)
+            ?.trim()
+            .orEmpty()
+
+        intent.removeExtra(WakeWordService.EXTRA_WAKE)
+        intent.removeExtra(WakeWordService.EXTRA_WAKE_COMMAND)
+
+        if (command.isNotEmpty()) {
+            addMessage(command, true)
+            handleCommand(command)
+        } else {
+            status.text = "LISTENING… SPEAK NOW"
+            // Short pause so the microphone is free again.
+            conversationScroll.postDelayed({ startVoiceInput() }, 400)
+        }
+    }
+
+    private fun updateWakeButton() {
+        if (!::wakeButton.isInitialized) return
+
+        val on = WakeWordService.isEnabled(this)
+
+        wakeButton.text = if (on) {
+            "● WAKE WORD ON · say Hey VIX (tap to turn off)"
+        } else {
+            "○ WAKE WORD OFF · tap to turn on"
+        }
+
+        wakeButton.setTextColor(
+            if (on) Color.rgb(68, 220, 130) else mutedColor
+        )
+    }
+
+    private fun toggleWake() {
+        if (WakeWordService.isEnabled(this)) {
+            WakeWordService.setEnabled(this, false)
+            startService(
+                Intent(this, WakeWordService::class.java)
+                    .setAction(WakeWordService.ACTION_STOP)
+            )
+            updateWakeButton()
+            showReply("Wake word is off.", false)
+            return
+        }
+
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            showReply(
+                "This phone has no speech recognition service, " +
+                    "so the wake word can't work.",
+                false
+            )
+            return
+        }
+
+        wakeNotifAsked = false
+        continueWakeSetup()
+    }
+
+    /** Asks for each needed permission in turn, then turns the wake word on. */
+    private fun continueWakeSetup() {
+        if (
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                WAKE_MIC_REQUEST
+            )
+            return
+        }
+
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            !wakeNotifAsked &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            wakeNotifAsked = true
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                WAKE_NOTIF_REQUEST
+            )
+            return
+        }
+
+        if (!Settings.canDrawOverlays(this)) {
+            addMessage(
+                "One last step: on the next screen, turn on " +
+                    "\"Allow display over other apps\" for VIX. " +
+                    "Android needs this so VIX can open when you say Hey VIX.",
+                false
+            )
+            startActivityForResult(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                ),
+                WAKE_OVERLAY_REQUEST
+            )
+            return
+        }
+
+        WakeWordService.setEnabled(this, true)
+        startForegroundService(Intent(this, WakeWordService::class.java))
+        updateWakeButton()
+
+        showReply(
+            "Wake word is on. Close VIX, then say \"Hey VIX\", " +
+                "\"Hello VIX\" or \"Hi VIX\". You can add your request, " +
+                "like \"Hey VIX open camera\".",
+            false
+        )
+        status.text = "DONE"
+    }
+
+    /** Restarts the listener after VIX is reopened, if it was turned on. */
+    private fun restoreWakeService() {
+        if (
+            WakeWordService.isEnabled(this) &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED &&
+            Settings.canDrawOverlays(this)
+        ) {
+            startForegroundService(Intent(this, WakeWordService::class.java))
         }
     }
 
@@ -719,6 +924,19 @@ class MainActivity : Activity() {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
+        if (requestCode == WAKE_OVERLAY_REQUEST) {
+            if (Settings.canDrawOverlays(this)) {
+                continueWakeSetup()
+            } else {
+                showReply(
+                    "Without \"Display over other apps\", I can't open " +
+                        "myself when you say Hey VIX. Wake word stays off.",
+                    false
+                )
+            }
+            return
+        }
+
         if (requestCode != SCREEN_CAPTURE_REQUEST) {
             return
         }
@@ -771,6 +989,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        updateWakeButton()
 
         // Tell the user what the capture service did while VIX was hidden.
         val report = ScreenCaptureService.takePendingReport()
