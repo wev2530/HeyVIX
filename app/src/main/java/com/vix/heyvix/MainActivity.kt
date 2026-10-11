@@ -1,11 +1,14 @@
-
 package com.vix.heyvix
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -42,9 +45,17 @@ class MainActivity : Activity() {
     private var listening = false
     private var requestInProgress = false
 
+    // The "VIX AI is typing" row shown while waiting for the AI.
+    private var typingRow: LinearLayout? = null
+
+    // Screenshot / screen recording waiting for Android's permission dialog.
+    private var pendingScreenAction: ScreenCaptureController.Action? = null
+
     companion object {
         private const val MICROPHONE_PERMISSION_REQUEST = 1001
         private const val CAMERA_PERMISSION_REQUEST = 1002
+        private const val SCREEN_CAPTURE_REQUEST = 1003
+        private const val NOTIFICATION_PERMISSION_REQUEST = 1004
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -359,6 +370,48 @@ class MainActivity : Activity() {
         }
     }
 
+    // ----------------------------------------------------------
+    // "VIX AI is typing" indicator (breathing logo + three dots)
+    // ----------------------------------------------------------
+
+    private fun showTyping() {
+        if (typingRow != null) {
+            return
+        }
+
+        val indicator = TypingIndicatorView(this)
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START
+            setPadding(0, dp(5), 0, dp(5))
+
+            addView(
+                indicator,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+
+        conversation.addView(row)
+        indicator.start()
+        typingRow = row
+
+        conversationScroll.post {
+            conversationScroll.fullScroll(View.FOCUS_DOWN)
+        }
+    }
+
+    private fun hideTyping() {
+        val row = typingRow ?: return
+
+        (row.getChildAt(0) as? TypingIndicatorView)?.stop()
+        conversation.removeView(row)
+        typingRow = null
+    }
+
     private fun submitTypedMessage() {
         val command = input.text.toString().trim()
 
@@ -470,6 +523,13 @@ class MainActivity : Activity() {
     private fun handleCommand(rawCommand: String) {
         status.text = "WORKING…"
 
+        // Screenshot and screen recording are handled before the router.
+        val screenAction = ScreenCaptureController.parse(rawCommand)
+        if (screenAction != null) {
+            handleScreenAction(screenAction)
+            return
+        }
+
         // Execute recognized local commands without sending them to the AI.
         val localResult = commandRouter.handle(rawCommand)
 
@@ -497,7 +557,11 @@ class MainActivity : Activity() {
 
         // Send general questions to the configured VIX AI API.
         requestInProgress = true
-        status.text = "CONTACTING VIX AI…"
+
+        // No "CONTACTING VIX AI…" text: show the breathing logo
+        // and three typing dots in the conversation instead.
+        status.text = "YOUR PERSONAL ASSISTANT"
+        showTyping()
 
         aiApiClient.sendMessage(rawCommand) { aiResult ->
             if (isFinishing || isDestroyed) {
@@ -505,6 +569,7 @@ class MainActivity : Activity() {
             }
 
             requestInProgress = false
+            hideTyping()
 
             showReply(
                 aiResult.message,
@@ -559,6 +624,13 @@ class MainActivity : Activity() {
                 }
             }
 
+            NOTIFICATION_PERMISSION_REQUEST -> {
+                // The capture works even if notifications are denied.
+                if (pendingScreenAction != null) {
+                    launchScreenCaptureConsent()
+                }
+            }
+
             CAMERA_PERMISSION_REQUEST -> {
                 val command = pendingCommand
                 pendingCommand = null
@@ -580,7 +652,137 @@ class MainActivity : Activity() {
         }
     }
 
+    // ----------------------------------------------------------
+    // Screenshot and screen recording
+    // ----------------------------------------------------------
+
+    private fun handleScreenAction(action: ScreenCaptureController.Action) {
+        if (action == ScreenCaptureController.Action.STOP_RECORDING) {
+            if (ScreenCaptureService.isRecording) {
+                startService(
+                    Intent(this, ScreenCaptureService::class.java)
+                        .setAction(ScreenCaptureService.ACTION_STOP_RECORDING)
+                )
+                showReply("Stopping the screen recording…", true)
+            } else {
+                showReply("No screen recording is running right now.", false)
+            }
+            return
+        }
+
+        if (
+            action == ScreenCaptureController.Action.START_RECORDING &&
+            ScreenCaptureService.isRecording
+        ) {
+            showReply(
+                "A screen recording is already running. " +
+                    "Say \"stop screen recording\" to finish it.",
+                false
+            )
+            return
+        }
+
+        pendingScreenAction = action
+
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_REQUEST
+            )
+            return
+        }
+
+        launchScreenCaptureConsent()
+    }
+
+    private fun launchScreenCaptureConsent() {
+        val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE)
+            as MediaProjectionManager
+
+        status.text = "WAITING FOR PERMISSION…"
+
+        startActivityForResult(
+            manager.createScreenCaptureIntent(),
+            SCREEN_CAPTURE_REQUEST
+        )
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?
+    ) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode != SCREEN_CAPTURE_REQUEST) {
+            return
+        }
+
+        val action = pendingScreenAction
+        pendingScreenAction = null
+
+        if (action == null) {
+            return
+        }
+
+        if (resultCode != RESULT_OK || data == null) {
+            showReply(
+                "Screen capture was not allowed, so I didn't capture anything.",
+                false
+            )
+            return
+        }
+
+        val screenshot = action == ScreenCaptureController.Action.SCREENSHOT
+
+        val serviceIntent = Intent(this, ScreenCaptureService::class.java)
+            .setAction(
+                if (screenshot) {
+                    ScreenCaptureService.ACTION_SCREENSHOT
+                } else {
+                    ScreenCaptureService.ACTION_START_RECORDING
+                }
+            )
+            .putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
+            .putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+
+        startForegroundService(serviceIntent)
+
+        showReply(
+            if (screenshot) {
+                "Taking the screenshot. I'll step aside for a moment so it " +
+                    "captures your real screen."
+            } else {
+                "Screen recording started. Say \"stop screen recording\" " +
+                    "or tap Stop in the notification."
+            },
+            false
+        )
+        status.text = "DONE"
+
+        // Move VIX to the background so it is not in the picture.
+        conversationScroll.postDelayed({ moveTaskToBack(true) }, 700)
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        // Tell the user what the capture service did while VIX was hidden.
+        val report = ScreenCaptureService.takePendingReport()
+        if (report != null) {
+            addMessage(report, false)
+            status.text = "DONE"
+        }
+    }
+
     override fun onDestroy() {
+        hideTyping()
+
         if (::voiceController.isInitialized) {
             voiceController.destroy()
         }
