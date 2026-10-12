@@ -56,6 +56,7 @@ class MainActivity : Activity() {
 
     // Wake word ("Hey VIX") toggle.
     private lateinit var wakeButton: Button
+    private lateinit var assistButton: Button
     private var wakeNotifAsked = false
 
     companion object {
@@ -81,6 +82,7 @@ class MainActivity : Activity() {
         setupVoice()
 
         updateWakeButton()
+        updateAssistButton()
         restoreWakeService()
         handleWakeIntent(intent)
     }
@@ -164,6 +166,22 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(38)
             ).apply { bottomMargin = dp(6) }
+        )
+
+        assistButton = Button(this).apply {
+            isAllCaps = false
+            textSize = 11f
+            setPadding(dp(10), 0, dp(10), 0)
+            background = roundedBackground(panelColor, 16)
+            setOnClickListener { onAssistClicked() }
+        }
+
+        root.addView(
+            assistButton,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(38)
+            ).apply { bottomMargin = dp(8) }
         )
 
         // Conversation history
@@ -858,6 +876,71 @@ class MainActivity : Activity() {
     }
 
     // ----------------------------------------------------------
+    // Power button / default assistant
+    // ----------------------------------------------------------
+
+    private fun isVixAssistant(): Boolean {
+        return try {
+            val value = Settings.Secure.getString(contentResolver, "assistant")
+                ?: ""
+            value.startsWith("$packageName/")
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun updateAssistButton() {
+        if (!::assistButton.isInitialized) return
+
+        val on = isVixAssistant()
+
+        assistButton.text = if (on) {
+            "● POWER BUTTON ASSISTANT: VIX is set"
+        } else {
+            "○ POWER BUTTON: tap to set VIX as assistant"
+        }
+
+        assistButton.setTextColor(
+            if (on) Color.rgb(68, 220, 130) else mutedColor
+        )
+    }
+
+    private fun onAssistClicked() {
+        if (isVixAssistant()) {
+            showReply(
+                "VIX is your phone's assistant. Hold the power button " +
+                    "to open it. If that opens something else, look in " +
+                    "Settings for \"Press and hold power button\" (or " +
+                    "\"Power key\") and choose the digital assistant.",
+                false
+            )
+            return
+        }
+
+        addMessage(
+            "On the next screen, open \"Digital assistant app\" and " +
+                "choose VIX. Then find the setting for pressing and " +
+                "holding the power button and set it to the digital " +
+                "assistant.",
+            false
+        )
+
+        try {
+            startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (_: Exception) {
+                showReply(
+                    "I couldn't open Settings. Open Settings, Apps, " +
+                        "Default apps, Digital assistant app, and choose VIX.",
+                    false
+                )
+            }
+        }
+    }
+
+    // ----------------------------------------------------------
     // Screenshot and screen recording
     // ----------------------------------------------------------
 
@@ -990,6 +1073,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         updateWakeButton()
+        updateAssistButton()
 
         // Tell the user what the capture service did while VIX was hidden.
         val report = ScreenCaptureService.takePendingReport()
