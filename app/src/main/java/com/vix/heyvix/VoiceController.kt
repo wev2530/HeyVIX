@@ -1,9 +1,12 @@
 package com.vix.heyvix
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognitionListener
+import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
@@ -24,6 +27,44 @@ class VoiceController(
     fun isAvailable(): Boolean =
         SpeechRecognizer.isRecognitionAvailable(context)
 
+    /**
+     * When VIX is chosen as the digital assistant, Android can also make
+     * VIX's do-nothing recognition service the phone's speech recognizer.
+     * In that case use a real recognizer from another app instead.
+     */
+    private fun createRecognizer(): SpeechRecognizer {
+        try {
+            val current = Settings.Secure.getString(
+                context.contentResolver,
+                "voice_recognition_service"
+            ) ?: ""
+
+            if (current.startsWith(context.packageName + "/")) {
+                val others = context.packageManager
+                    .queryIntentServices(
+                        Intent(RecognitionService.SERVICE_INTERFACE),
+                        0
+                    )
+                    .map { it.serviceInfo }
+                    .filter { it.packageName != context.packageName }
+
+                val pick = others.firstOrNull {
+                    it.packageName == "com.google.android.googlequicksearchbox"
+                } ?: others.firstOrNull()
+
+                if (pick != null) {
+                    return SpeechRecognizer.createSpeechRecognizer(
+                        context,
+                        ComponentName(pick.packageName, pick.name)
+                    )
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        return SpeechRecognizer.createSpeechRecognizer(context)
+    }
+
     fun start() {
         if (!isAvailable()) {
             listener.onError(
@@ -34,7 +75,7 @@ class VoiceController(
 
         stop()
 
-        val r = SpeechRecognizer.createSpeechRecognizer(context)
+        val r = createRecognizer()
         recognizer = r
 
         r.setRecognitionListener(object : RecognitionListener {

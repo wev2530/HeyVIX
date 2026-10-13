@@ -41,6 +41,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Many phones only list apps that can handle ASSIST in the
+                 "Digital assistant app" picker. -->
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+
         </activity>
 
         <service
@@ -70,9 +77,19 @@
             android:exported="true"
             android:permission="android.permission.BIND_VOICE_INTERACTION" />
 
+        <!-- Declared like the Android voice interaction sample:
+             exported, with the RecognitionService filter and meta-data. -->
         <service
             android:name=".VixRecognitionService"
-            android:exported="false" />
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/vix_recognition" />
+        </service>
 
     </application>
 
