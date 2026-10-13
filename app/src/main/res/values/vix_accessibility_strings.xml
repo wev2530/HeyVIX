@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="vix_volume_service_label">VIX volume wake</string>
+    <string name="vix_volume_service_description">Lets you hold either volume button for half a second to open VIX over any app. VIX only watches the volume buttons. It does not read your screen.</string>
+</resources>
