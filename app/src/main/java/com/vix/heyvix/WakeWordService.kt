@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -17,7 +18,12 @@ import android.os.IBinder
 import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.provider.Settings
 import android.speech.SpeechRecognizer
+import android.view.KeyEvent
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Toast
 
 /**
@@ -75,6 +81,10 @@ class WakeWordService : Service() {
     private var recognizer: SpeechRecognizer? = null
     private var active = false
     private var waking = false
+
+    // The VIX overlay panel shown over other apps after "Hey VIX".
+    private var overlayPanel: VixOverlayPanel? = null
+    private var overlayView: View? = null
 
     private val restartRunnable = Runnable { startRecognizer() }
 
@@ -223,6 +233,25 @@ class WakeWordService : Service() {
         waking = true
         stopRecognizer()
 
+        // "Hey VIX" on its own: show the overlay over the current app.
+        if (command.isEmpty() && Settings.canDrawOverlays(this)) {
+            if (showOverlay()) {
+                // Listening resumes when the overlay is closed.
+                return
+            }
+        }
+
+        // "Hey VIX open camera" (or no overlay permission): open the app.
+        openApp(command)
+
+        // If VIX didn't open, start listening again after a few seconds.
+        mainHandler.postDelayed({
+            waking = false
+            refreshListening()
+        }, 8000)
+    }
+
+    private fun openApp(command: String?) {
         try {
             val intent = Intent(this, MainActivity::class.java)
                 .addFlags(
@@ -230,19 +259,101 @@ class WakeWordService : Service() {
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
                         Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                 )
-                .putExtra(EXTRA_WAKE, true)
-                .putExtra(EXTRA_WAKE_COMMAND, command)
+
+            if (!command.isNullOrBlank()) {
+                intent.putExtra(EXTRA_WAKE, true)
+                intent.putExtra(EXTRA_WAKE_COMMAND, command)
+            } else if (command == "") {
+                // Plain wake: open VIX and start listening.
+                intent.putExtra(EXTRA_WAKE, true)
+            }
 
             startActivity(intent)
         } catch (_: Exception) {
-            // If Android blocks it, we resume listening below.
+            // If Android blocks it, we resume listening.
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Overlay
+    // ------------------------------------------------------------
+
+    private fun showOverlay(): Boolean {
+        if (overlayView != null) return true
+
+        return try {
+            val windowManager = getSystemService(WINDOW_SERVICE)
+                as WindowManager
+
+            val panel = VixOverlayPanel(
+                this,
+                { command ->
+                    // "Open VIX" button, or a command that needs the app.
+                    if (command.isNullOrBlank()) {
+                        openApp(null)
+                    } else {
+                        openApp(command)
+                    }
+                    hideOverlay()
+                },
+                { hideOverlay() }
+            )
+
+            val root = panel.root
+            root.isFocusableInTouchMode = true
+            root.setOnKeyListener { _, keyCode, event ->
+                if (
+                    keyCode == KeyEvent.KEYCODE_BACK &&
+                    event.action == KeyEvent.ACTION_UP
+                ) {
+                    hideOverlay()
+                    true
+                } else {
+                    false
+                }
+            }
+
+            val params = WindowManager.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            }
+
+            windowManager.addView(root, params)
+
+            overlayPanel = panel
+            overlayView = root
+
+            panel.onShown()
+            root.requestFocus()
+            true
+        } catch (_: Exception) {
+            overlayPanel = null
+            overlayView = null
+            false
+        }
+    }
+
+    private fun hideOverlay() {
+        val view = overlayView ?: return
+
+        overlayPanel?.onHidden()
+        overlayPanel = null
+        overlayView = null
+
+        try {
+            val windowManager = getSystemService(WINDOW_SERVICE)
+                as WindowManager
+            windowManager.removeView(view)
+        } catch (_: Exception) {
         }
 
-        // If VIX didn't open, start listening again after a few seconds.
-        mainHandler.postDelayed({
-            waking = false
-            refreshListening()
-        }, 8000)
+        waking = false
+        refreshListening()
     }
 
     private fun disableSelf(message: String) {
@@ -309,6 +420,7 @@ class WakeWordService : Service() {
 
     override fun onDestroy() {
         active = false
+        hideOverlay()
         mainHandler.removeCallbacksAndMessages(null)
         stopRecognizer()
         instance = null
