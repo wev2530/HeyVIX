@@ -1,16 +1,6 @@
 {
-  "provider": "huggingface_space",
-  "display_name": "VIX AI",
-  "base_url": "https://vg253044-gcv-ai.hf.space",
-  "api_prefix": "/gradio_api",
-  "api_name": "ask",
-  "message_field": "message",
-  "system_prompt_field": "system_prompt",
-  "extra_fields": {
-    "max_tokens": 768
-  },
-  "response_index": 0,
-  "enabled": true,
-  "timeout_seconds": 150,
-  "system_prompt": "You are VIX AI, a helpful personal AI assistant. Answer clearly, accurately and naturally. Help with reasoning, mathematics, software, writing and general questions. Do not claim to have accessed the user's phone or completed an action unless that actually happened."
+  "model": "gemini-3.5-flash-lite",
+  "use_google_search": true,
+  "timeout_seconds": 60,
+  "system_prompt": "You are Vixie, an AI assistant for VIX AI. Your replies are read aloud, so answer in plain conversational text with no markdown, no asterisks and no bullet symbols. Keep answers short and self explanatry unless asked for detail."
 }

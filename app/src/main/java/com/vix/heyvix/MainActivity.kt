@@ -472,6 +472,22 @@ class MainActivity : Activity() {
             return
         }
 
+        // "/key AIza..." saves the Gemini API key privately on this phone.
+        // It is handled here so the key is never shown as a chat bubble.
+        if (command.startsWith("/key ", ignoreCase = true)) {
+            input.text.clear()
+            val key = command.substring(5).trim()
+
+            if (key.isEmpty()) {
+                addMessage("Type /key followed by your Gemini API key.", false)
+            } else {
+                AiApiClient.saveKey(this, key)
+                addMessage("Gemini key saved on this phone.", false)
+                status.text = "DONE"
+            }
+            return
+        }
+
         if (requestInProgress) {
             Toast.makeText(
                 this,

@@ -5,8 +5,6 @@ import android.os.Handler
 import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -16,14 +14,13 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * Talks to a Gradio 6 Space.
- *   1. POST {base}{prefix}/call/v2/{api_name}  body {"message": ..., "system_prompt": ..., ...}
- *      (falls back to the older POST {base}{prefix}/call/{api_name} {"data": [...]})
- *      -> {"event_id": "..."}
- *   2. GET  {base}{prefix}/call/{api_name}/{event_id}  (server-sent events)
+ * Talks to Google's Gemini API (with Google Search grounding for live info).
  *
- * Settings live in assets/ai_config.json. The Hugging Face token is never stored in
- * the repo: type "/token hf_xxx" in the chat to save it on this phone.
+ * The API key is never stored in the repo. Type "/key AIza..." in the chat
+ * to save it privately on this phone.
+ *
+ * Optional settings live in assets/ai_config.json:
+ *   model, system_prompt, use_google_search, timeout_seconds
  */
 class AiApiClient(context: Context) {
 
@@ -34,13 +31,19 @@ class AiApiClient(context: Context) {
 
     companion object {
         private const val PREFS = "vix_private"
-        private const val KEY_TOKEN = "hf_token"
+        private const val KEY_API = "gemini_key"
+        private const val DEFAULT_MODEL = "gemini-3.5-flash-lite"
+        private const val DEFAULT_SYSTEM =
+            "You are Vixie, an AI assistant for VIX AI. Your replies are read aloud, " +
+                "so answer in plain conversational text with no markdown, no asterisks " +
+                "and no bullet symbols. Keep answers short unless asked for detail."
+        private const val MAX_HISTORY_MESSAGES = 20
 
-        fun saveToken(context: Context, token: String) {
+        fun saveKey(context: Context, key: String) {
             context.applicationContext
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
-                .putString(KEY_TOKEN, token.trim())
+                .putString(KEY_API, key.trim())
                 .apply()
         }
     }
@@ -51,20 +54,27 @@ class AiApiClient(context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
 
+    // Recent conversation so follow-up questions work: (role, text)
+    private val history = ArrayList<Pair<String, String>>()
+
     private val config: JSONObject by lazy {
-        appContext.assets.open("ai_config.json")
-            .bufferedReader()
-            .use { JSONObject(it.readText()) }
+        try {
+            appContext.assets.open("ai_config.json")
+                .bufferedReader()
+                .use { JSONObject(it.readText()) }
+        } catch (e: Exception) {
+            JSONObject()
+        }
     }
 
-    private fun token(): String =
+    private fun apiKey(): String =
         appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_TOKEN, "") ?: ""
+            .getString(KEY_API, "") ?: ""
 
     fun sendMessage(message: String, callback: (Result) -> Unit) {
         executor.execute {
             val result = try {
-                askGradio(message)
+                askGemini(message)
             } catch (e: Exception) {
                 Result(false, "VIX AI connection error: " + describe(e))
             }
@@ -72,147 +82,114 @@ class AiApiClient(context: Context) {
         }
     }
 
-    private fun askGradio(message: String): Result {
-        val baseUrl = config.getString("base_url").trimEnd('/')
-        var prefix = config.optString("api_prefix", "/gradio_api").trim().trimEnd('/')
-        if (prefix.isNotEmpty() && !prefix.startsWith("/")) prefix = "/$prefix"
-        val apiName = config.optString("api_name", "ask").trim('/', ' ')
-        val readTimeoutMs = config.optInt("timeout_seconds", 150) * 1000
-        val responseIndex = config.optInt("response_index", 0)
-        val systemPrompt = config.optString("system_prompt", "You are VIX AI, a helpful assistant.")
-        val messageField = config.optString("message_field", "message")
-        val systemField = config.optString("system_prompt_field", "system_prompt")
-        val extra = config.optJSONObject("extra_fields")
-
-        // Newer format: named fields.
-        val named = JSONObject().put(messageField, message).put(systemField, systemPrompt)
-        // Older format: ordered list.
-        val ordered = JSONArray().put(message).put(systemPrompt)
-        if (extra != null) {
-            val keys = extra.keys()
-            while (keys.hasNext()) {
-                val k = keys.next()
-                named.put(k, extra.get(k))
-                ordered.put(extra.get(k))
-            }
+    private fun askGemini(message: String): Result {
+        val key = apiKey()
+        if (key.isBlank()) {
+            return Result(
+                false,
+                "No Gemini key saved yet. Type /key followed by your key. " +
+                    "You can get a free one at aistudio.google.com."
+            )
         }
 
-        val callBase = "$baseUrl$prefix/call/$apiName"
-        val joined = try {
-            requestJson("POST", "$baseUrl$prefix/call/v2/$apiName", named, 20000, 30000)
-        } catch (e: ApiException) {
-            if (e.status == 404 || e.status == 405 || e.status == 422) {
-                requestJson("POST", callBase, JSONObject().put("data", ordered), 20000, 30000)
-            } else {
-                throw e
-            }
+        val model = config.optString("model", DEFAULT_MODEL).ifBlank { DEFAULT_MODEL }
+        val systemPrompt = config.optString("system_prompt", DEFAULT_SYSTEM).ifBlank { DEFAULT_SYSTEM }
+        val useSearch = config.optBoolean("use_google_search", true)
+        val timeoutMs = config.optInt("timeout_seconds", 60) * 1000
+
+        val contents = JSONArray()
+        for ((role, text) in history) {
+            contents.put(contentOf(role, text))
+        }
+        contents.put(contentOf("user", message))
+
+        val body = JSONObject()
+            .put(
+                "system_instruction",
+                JSONObject().put(
+                    "parts",
+                    JSONArray().put(JSONObject().put("text", systemPrompt))
+                )
+            )
+            .put("contents", contents)
+
+        if (useSearch) {
+            body.put(
+                "tools",
+                JSONArray().put(JSONObject().put("google_search", JSONObject()))
+            )
         }
 
-        val eventId = joined.optString("event_id")
-        if (eventId.isBlank()) {
-            throw Exception("Gradio did not return an event_id: " + joined.toString().take(200))
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+        val response = postJson(url, key, body, timeoutMs)
+        val text = extractText(response)
+
+        // Remember this exchange (only after success).
+        history.add("user" to message)
+        history.add("model" to text)
+        while (history.size > MAX_HISTORY_MESSAGES) {
+            history.removeAt(0)
         }
-        return readResult("$callBase/$eventId", readTimeoutMs, responseIndex)
+
+        return Result(true, text)
     }
 
-    private fun readResult(url: String, readTimeoutMs: Int, responseIndex: Int): Result {
-        val connection = URL(url).openConnection() as HttpURLConnection
-        try {
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 20000
-            connection.readTimeout = readTimeoutMs
-            connection.setRequestProperty("Accept", "text/event-stream")
-            addAuth(connection)
+    private fun contentOf(role: String, text: String): JSONObject =
+        JSONObject()
+            .put("role", role)
+            .put("parts", JSONArray().put(JSONObject().put("text", text)))
 
-            val status = connection.responseCode
-            if (status !in 200..299) {
-                val err = connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
-                throw ApiException(status, err)
+    private fun extractText(response: JSONObject): String {
+        val blocked = response.optJSONObject("promptFeedback")?.optString("blockReason", "")
+        if (!blocked.isNullOrBlank()) {
+            throw Exception("Google blocked this request ($blocked).")
+        }
+
+        val candidate = response.optJSONArray("candidates")?.optJSONObject(0)
+            ?: throw Exception("Gemini returned no answer.")
+
+        val parts = candidate.optJSONObject("content")?.optJSONArray("parts")
+        val sb = StringBuilder()
+        if (parts != null) {
+            for (i in 0 until parts.length()) {
+                val t = parts.optJSONObject(i)?.optString("text", "").orEmpty()
+                if (t.isNotBlank()) sb.append(t)
             }
+        }
 
-            var eventName = ""
-            BufferedReader(InputStreamReader(connection.inputStream, StandardCharsets.UTF_8)).use { reader ->
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (line.startsWith("event:")) {
-                        eventName = line.substringAfter(":").trim()
-                    } else if (line.startsWith("data:")) {
-                        val raw = line.substringAfter(":").trim()
-                        when (eventName) {
-                            "complete" -> return Result(true, extractText(raw, responseIndex))
-                            "error" -> throw Exception(errorText(raw))
-                        }
-                    }
-                }
-            }
-            throw Exception("The stream closed before VIX AI returned a result.")
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private fun addAuth(connection: HttpURLConnection) {
-        val t = token()
-        if (t.isNotBlank()) {
-            connection.setRequestProperty("Authorization", "Bearer $t")
-        }
-    }
-
-    private fun extractText(raw: String, index: Int): String {
-        val outputs = try {
-            JSONArray(raw)
-        } catch (e: Exception) {
-            throw Exception("Unexpected response format: " + raw.take(200))
-        }
-        val item = outputs.opt(index)
-        val text = when (item) {
-            null, JSONObject.NULL -> ""
-            is String -> item
-            is JSONObject -> item.optString("value", item.optString("text", ""))
-            else -> item.toString()
-        }
-        if (text.isBlank() || text == "null") {
-            throw Exception("The model returned no text (output #$index).")
+        val text = sb.toString().trim()
+        if (text.isBlank()) {
+            val reason = candidate.optString("finishReason", "unknown")
+            throw Exception("Gemini returned no text (reason: $reason).")
         }
         return text
     }
 
-    private fun errorText(raw: String): String {
-        if (raw.isBlank() || raw == "null") {
-            return "The Space reported an error. It may be out of GPU quota, overloaded, or still loading."
-        }
-        return try {
-            JSONObject(raw).optString("message", raw)
-        } catch (e: Exception) {
-            raw.trim('"').take(300)
-        }
-    }
-
-    private fun requestJson(
-        method: String,
-        url: String,
-        body: JSONObject?,
-        connectMs: Int,
-        readMs: Int
-    ): JSONObject {
+    private fun postJson(url: String, key: String, body: JSONObject, readMs: Int): JSONObject {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {
-            connection.requestMethod = method
-            connection.connectTimeout = connectMs
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 20000
             connection.readTimeout = readMs
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Accept", "application/json")
-            addAuth(connection)
-            if (body != null) {
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.outputStream.use {
-                    it.write(body.toString().toByteArray(StandardCharsets.UTF_8))
-                }
+            connection.setRequestProperty("x-goog-api-key", key)
+            connection.outputStream.use {
+                it.write(body.toString().toByteArray(StandardCharsets.UTF_8))
             }
+
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (status !in 200..299) throw ApiException(status, text)
+            if (status !in 200..299) {
+                val msg = try {
+                    JSONObject(text).optJSONObject("error")?.optString("message", text) ?: text
+                } catch (e: Exception) {
+                    text
+                }
+                throw ApiException(status, msg)
+            }
             return JSONObject(text)
         } finally {
             connection.disconnect()
@@ -220,12 +197,19 @@ class AiApiClient(context: Context) {
     }
 
     private fun describe(e: Exception): String = when (e) {
-        is ApiException -> when (e.status) {
-            401, 403 -> "Hugging Face rejected the request (HTTP ${e.status}). Type /token followed by your token to save it."
-            404 -> "HTTP 404. The Space address or API name is wrong, or the Space isn't running. (${e.message?.take(120)})"
-            422 -> "HTTP 422. The Space rejected the request format. (${e.message?.take(160)})"
-            429 -> "Too many requests or out of GPU quota (HTTP 429). Try again later."
-            502, 503, 504 -> "The Space is asleep or restarting (HTTP ${e.status}). Try again in a minute."
+        is ApiException -> when {
+            e.status == 400 && (e.message ?: "").contains("API key", ignoreCase = true) ->
+                "Google rejected the key. Type /key followed by a valid Gemini key."
+            e.status == 400 -> "Bad request (HTTP 400): ${e.message?.take(160)}"
+            e.status == 401 || e.status == 403 ->
+                "Google rejected the key or this model isn't allowed (HTTP ${e.status}). " +
+                    "Check the key with /key. ${e.message?.take(120)}"
+            e.status == 404 ->
+                "Model not found (HTTP 404). Check the model name in ai_config.json."
+            e.status == 429 ->
+                "Free limit reached (HTTP 429). Wait a bit and try again."
+            e.status in 500..599 ->
+                "Google's server is busy (HTTP ${e.status}). Try again in a moment."
             else -> "HTTP ${e.status}: ${e.message?.take(160)}"
         }
         is SocketTimeoutException -> "VIX AI took too long to answer."
