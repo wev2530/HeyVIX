@@ -3,6 +3,7 @@ package com.vix.heyvix
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -15,11 +16,13 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.Switch
 import android.widget.TextView
 
 /**
  * The VIX overlay: a bottom sheet shown over any app.
- * Type or speak, then choose VIX AI or Phone command.
+ * Switch 1: VIX AI on = ask the AI, off = phone assistant commands.
+ * Switch 2 (only when AI is on): web search on or off.
  */
 class VixOverlayPanel(
     private val context: Context,
@@ -41,6 +44,7 @@ class VixOverlayPanel(
     private var mode = Mode.AI
     private var listening = false
     private var busy = false
+    private var updating = false // true while code (not the user) moves a switch
 
     private var router: LocalCommandRouter? = null
     private var ai: AiApiClient? = null
@@ -49,8 +53,11 @@ class VixOverlayPanel(
 
     val root = FrameLayout(context)
     private val status = TextView(context)
-    private val aiChip = Button(context)
-    private val phoneChip = Button(context)
+    private val aiTitle = TextView(context)
+    private val aiSub = TextView(context)
+    private val aiSwitch = Switch(context)
+    private val searchRow = LinearLayout(context)
+    private val searchSwitch = Switch(context)
     private val reply = TextView(context)
     private val typing = TypingIndicatorView(context)
     private val input = EditText(context)
@@ -89,28 +96,54 @@ class VixOverlayPanel(
             setTextColor(mutedColor)
         }
         top.addView(status, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-
-        val openBtn = smallText("Open VIX") { openVix(null) }
-        top.addView(openBtn)
-        val closeBtn = smallText("✕") { closePanel() }
-        top.addView(closeBtn)
+        top.addView(smallText("Open VIX") { openVix(null) })
+        top.addView(smallText("✕") { closePanel() })
         sheet.addView(top)
 
-        // Mode chips
-        val modes = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
+        // Switch 1: VIX AI on / off (off = phone assistant)
+        val aiTexts = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        aiTitle.apply { textSize = 16f; setTextColor(textColor) }
+        aiSub.apply { textSize = 12f; setTextColor(mutedColor) }
+        aiTexts.addView(aiTitle)
+        aiTexts.addView(aiSub)
+
+        styleSwitch(aiSwitch)
+        aiSwitch.setOnCheckedChangeListener { _, checked ->
+            if (updating) return@setOnCheckedChangeListener
+            setMode(if (checked) Mode.AI else Mode.PHONE, animate = true)
         }
-        styleChip(aiChip, "VIX AI") { setMode(Mode.AI) }
-        styleChip(phoneChip, "Phone command") { setMode(Mode.PHONE) }
-        modes.addView(aiChip, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginEnd = dp(6) })
-        modes.addView(phoneChip, LinearLayout.LayoutParams(0, dp(40), 1f))
-        sheet.addView(
-            modes,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(10) }
-        )
+
+        val aiRow = switchRow(aiTexts, aiSwitch)
+        sheet.addView(aiRow, fullWidth(topMargin = 12))
+
+        // Switch 2: web search (only shown while VIX AI is on)
+        val searchTexts = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        searchTexts.addView(TextView(context).apply {
+            text = "Web search"
+            textSize = 14f
+            setTextColor(textColor)
+        })
+        searchTexts.addView(TextView(context).apply {
+            text = "Live info from Google"
+            textSize = 11f
+            setTextColor(mutedColor)
+        })
+
+        styleSwitch(searchSwitch)
+        searchSwitch.setOnCheckedChangeListener { _, checked ->
+            if (updating) return@setOnCheckedChangeListener
+            AiApiClient.setWebSearch(context, checked)
+        }
+
+        searchRow.apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = rounded(chipColor, 14)
+            addView(searchTexts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(searchSwitch)
+        }
+        sheet.addView(searchRow, fullWidth(topMargin = 8))
 
         // Reply area
         reply.apply {
@@ -122,13 +155,7 @@ class VixOverlayPanel(
             visibility = View.GONE
             background = rounded(Color.rgb(20, 20, 26), 14)
         }
-        sheet.addView(
-            reply,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(10) }
-        )
+        sheet.addView(reply, fullWidth(topMargin = 10))
 
         typing.visibility = View.GONE
         sheet.addView(
@@ -148,7 +175,6 @@ class VixOverlayPanel(
         }
 
         input.apply {
-            hint = "Type or tap the mic…"
             textSize = 15f
             setTextColor(textColor)
             setHintTextColor(mutedColor)
@@ -188,13 +214,7 @@ class VixOverlayPanel(
         }
         composer.addView(send, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginStart = dp(5) })
 
-        sheet.addView(
-            composer,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(10) }
-        )
+        sheet.addView(composer, fullWidth(topMargin = 10))
 
         root.addView(
             sheet,
@@ -206,12 +226,52 @@ class VixOverlayPanel(
         )
     }
 
-    private fun setMode(m: Mode) {
+    /** Moves both switches and text to match the mode. */
+    private fun setMode(m: Mode, animate: Boolean) {
         mode = m
         prefs.edit().putString("mode", m.name).apply()
-        paintChip(aiChip, m == Mode.AI)
-        paintChip(phoneChip, m == Mode.PHONE)
-        input.hint = if (m == Mode.AI) "Ask VIX AI…" else "Say a phone command…"
+
+        updating = true
+        aiSwitch.isChecked = (m == Mode.AI)
+        updating = false
+
+        if (m == Mode.AI) {
+            aiTitle.text = "VIX AI"
+            aiSub.text = "Ask anything"
+            input.hint = "Ask VIX AI…"
+        } else {
+            aiTitle.text = "Phone assistant"
+            aiSub.text = "Open apps, flashlight, camera"
+            input.hint = "Say a phone command…"
+        }
+
+        showSearchRow(m == Mode.AI, animate)
+    }
+
+    private fun showSearchRow(show: Boolean, animate: Boolean) {
+        searchRow.animate().cancel()
+
+        if (!animate) {
+            searchRow.alpha = 1f
+            searchRow.translationY = 0f
+            searchRow.visibility = if (show) View.VISIBLE else View.GONE
+            return
+        }
+
+        val shift = dp(8).toFloat()
+        if (show) {
+            searchRow.alpha = 0f
+            searchRow.translationY = -shift
+            searchRow.visibility = View.VISIBLE
+            searchRow.animate().alpha(1f).translationY(0f).setDuration(220).start()
+        } else {
+            searchRow.animate()
+                .alpha(0f)
+                .translationY(-shift)
+                .setDuration(160)
+                .withEndAction { searchRow.visibility = View.GONE }
+                .start()
+        }
     }
 
     // ---------------- Lifecycle ----------------
@@ -222,9 +282,14 @@ class VixOverlayPanel(
         reply.visibility = View.GONE
         typing.stop(); typing.visibility = View.GONE
         input.setText("")
+        status.text = "READY"
+
+        updating = true
+        searchSwitch.isChecked = AiApiClient.isWebSearchOn(context)
+        updating = false
 
         val saved = prefs.getString("mode", Mode.AI.name)
-        setMode(if (saved == Mode.PHONE.name) Mode.PHONE else Mode.AI)
+        setMode(if (saved == Mode.PHONE.name) Mode.PHONE else Mode.AI, animate = false)
 
         if (
             context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
@@ -238,6 +303,7 @@ class VixOverlayPanel(
 
     fun onHidden() {
         handler.removeCallbacksAndMessages(null)
+        searchRow.animate().cancel()
         listening = false
         busy = false
         typing.stop()
@@ -337,7 +403,7 @@ class VixOverlayPanel(
         when {
             !r.handled -> {
                 status.text = "NEEDS ATTENTION"
-                showReply("That isn't a phone command I know. Switch to VIX AI to ask it.")
+                showReply("That isn't a phone command I know. Turn VIX AI on to ask it.")
             }
 
             r.needsCameraPermission -> openVix(text)
@@ -354,7 +420,7 @@ class VixOverlayPanel(
 
     private fun askAi(text: String) {
         busy = true
-        status.text = "VIX AI IS THINKING…"
+        status.text = if (searchSwitch.isChecked) "VIX AI IS SEARCHING…" else "VIX AI IS THINKING…"
         typing.visibility = View.VISIBLE
         typing.start()
 
@@ -366,7 +432,13 @@ class VixOverlayPanel(
             busy = false
             typing.stop()
             typing.visibility = View.GONE
-            status.text = if (result.successful) "DONE" else "NEEDS ATTENTION"
+
+            status.text = when {
+                !result.successful -> "NEEDS ATTENTION"
+                searchSwitch.isChecked && AiApiClient.searchBlocked ->
+                    "DONE · NO WEB SEARCH ON THIS KEY"
+                else -> "DONE"
+            }
             showReply(result.message)
 
             if (result.successful) {
@@ -387,18 +459,26 @@ class VixOverlayPanel(
 
     // ---------------- Helpers ----------------
 
-    private fun styleChip(b: Button, label: String, onClick: () -> Unit) {
-        b.text = label
-        b.textSize = 12f
-        b.isAllCaps = false
-        b.setPadding(dp(8), 0, dp(8), 0)
-        b.setOnClickListener { onClick() }
+    private fun switchRow(texts: View, sw: Switch) = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(sw)
     }
 
-    private fun paintChip(b: Button, selected: Boolean) {
-        b.background = rounded(if (selected) redColor else chipColor, 16)
-        b.setTextColor(if (selected) Color.WHITE else mutedColor)
+    private fun styleSwitch(s: Switch) {
+        val states = arrayOf(
+            intArrayOf(android.R.attr.state_checked),
+            intArrayOf()
+        )
+        s.thumbTintList = ColorStateList(states, intArrayOf(Color.WHITE, mutedColor))
+        s.trackTintList = ColorStateList(states, intArrayOf(redColor, Color.rgb(70, 70, 82)))
     }
+
+    private fun fullWidth(topMargin: Int) = LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+    ).apply { this.topMargin = dp(topMargin) }
 
     private fun smallText(label: String, onClick: () -> Unit) =
         TextView(context).apply {

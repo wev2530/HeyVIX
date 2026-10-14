@@ -38,6 +38,26 @@ class AiApiClient(context: Context) {
                 "so answer in plain conversational text with no markdown, no asterisks " +
                 "and no bullet symbols. Keep answers short unless asked for detail."
         private const val MAX_HISTORY_MESSAGES = 20
+                private const val KEY_SEARCH = "web_search"
+
+        /** True when Google refused search for this key (free tier). */
+        val searchBlocked: Boolean
+            get() = searchRefused
+
+        /** Web search switch. Off by default. */
+        fun isWebSearchOn(context: Context): Boolean =
+            context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_SEARCH, false)
+
+        fun setWebSearch(context: Context, on: Boolean) {
+            context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_SEARCH, on)
+                .apply()
+            if (on) searchRefused = false // try search again
+        }
 
         fun saveKey(context: Context, key: String) {
             context.applicationContext
@@ -94,7 +114,7 @@ class AiApiClient(context: Context) {
 
         val model = config.optString("model", DEFAULT_MODEL).ifBlank { DEFAULT_MODEL }
         val systemPrompt = config.optString("system_prompt", DEFAULT_SYSTEM).ifBlank { DEFAULT_SYSTEM }
-        val useSearch = config.optBoolean("use_google_search", true)
+        val wantSearch = isWebSearchOn(appContext)
         val timeoutMs = config.optInt("timeout_seconds", 60) * 1000
 
         val contents = JSONArray()
