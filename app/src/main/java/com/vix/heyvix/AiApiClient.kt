@@ -20,7 +20,9 @@ import java.util.concurrent.Executors
  * to save it privately on this phone.
  *
  * Optional settings live in assets/ai_config.json:
- *   model, system_prompt, use_google_search, timeout_seconds
+ *   model, system_prompt, timeout_seconds
+ *
+ * Web search is controlled by the switch in the VIX overlay (off by default).
  */
 class AiApiClient(context: Context) {
 
@@ -32,13 +34,17 @@ class AiApiClient(context: Context) {
     companion object {
         private const val PREFS = "vix_private"
         private const val KEY_API = "gemini_key"
+        private const val KEY_SEARCH = "web_search"
         private const val DEFAULT_MODEL = "gemini-3.5-flash-lite"
         private const val DEFAULT_SYSTEM =
             "You are Vixie, an AI assistant for VIX AI. Your replies are read aloud, " +
                 "so answer in plain conversational text with no markdown, no asterisks " +
                 "and no bullet symbols. Keep answers short unless asked for detail."
         private const val MAX_HISTORY_MESSAGES = 20
-                private const val KEY_SEARCH = "web_search"
+
+        /** Set to true when Google refuses web search for this key (free tier). */
+        @Volatile
+        private var searchRefused = false
 
         /** True when Google refused search for this key (free tier). */
         val searchBlocked: Boolean
@@ -65,6 +71,7 @@ class AiApiClient(context: Context) {
                 .edit()
                 .putString(KEY_API, key.trim())
                 .apply()
+            searchRefused = false // a new key may allow search
         }
     }
 
@@ -114,7 +121,6 @@ class AiApiClient(context: Context) {
 
         val model = config.optString("model", DEFAULT_MODEL).ifBlank { DEFAULT_MODEL }
         val systemPrompt = config.optString("system_prompt", DEFAULT_SYSTEM).ifBlank { DEFAULT_SYSTEM }
-        val wantSearch = isWebSearchOn(appContext)
         val timeoutMs = config.optInt("timeout_seconds", 60) * 1000
 
         val contents = JSONArray()
@@ -123,25 +129,44 @@ class AiApiClient(context: Context) {
         }
         contents.put(contentOf("user", message))
 
-        val body = JSONObject()
-            .put(
-                "system_instruction",
-                JSONObject().put(
-                    "parts",
-                    JSONArray().put(JSONObject().put("text", systemPrompt))
+        // Builds the request, with or without the Google Search tool.
+        fun bodyFor(withSearch: Boolean): JSONObject {
+            val body = JSONObject()
+                .put(
+                    "system_instruction",
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", systemPrompt))
+                    )
                 )
-            )
-            .put("contents", contents)
+                .put("contents", contents)
 
-        if (useSearch) {
-            body.put(
-                "tools",
-                JSONArray().put(JSONObject().put("google_search", JSONObject()))
-            )
+            if (withSearch) {
+                body.put(
+                    "tools",
+                    JSONArray().put(JSONObject().put("google_search", JSONObject()))
+                )
+            }
+            return body
         }
 
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
-        val response = postJson(url, key, body, timeoutMs)
+
+        // Search only when the switch is on AND Google has not refused it for this key.
+        val searchNow = isWebSearchOn(appContext) && !searchRefused
+
+        val response = try {
+            postJson(url, key, bodyFor(searchNow), timeoutMs)
+        } catch (e: ApiException) {
+            if (searchNow && looksLikeSearchRefusal(e)) {
+                // Free keys can be refused search: answer without it instead of failing.
+                searchRefused = true
+                postJson(url, key, bodyFor(false), timeoutMs)
+            } else {
+                throw e
+            }
+        }
+
         val text = extractText(response)
 
         // Remember this exchange (only after success).
@@ -152,6 +177,14 @@ class AiApiClient(context: Context) {
         }
 
         return Result(true, text)
+    }
+
+    private fun looksLikeSearchRefusal(e: ApiException): Boolean {
+        if (e.status != 400 && e.status != 403 && e.status != 429) return false
+        val text = (e.message ?: "").lowercase()
+        return text.contains("search") ||
+            text.contains("grounding") ||
+            text.contains("tool")
     }
 
     private fun contentOf(role: String, text: String): JSONObject =
