@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -21,6 +22,7 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -59,6 +61,14 @@ class MainActivity : Activity() {
     private lateinit var assistButton: Button
     private var wakeNotifAsked = false
 
+    // VIX AI mode + web search switches (shared with the overlay).
+    private lateinit var aiModeTitle: TextView
+    private lateinit var aiModeSub: TextView
+    private lateinit var aiModeSwitch: Switch
+    private lateinit var searchRow: LinearLayout
+    private lateinit var searchSwitch: Switch
+    private var updatingSwitches = false
+
     companion object {
         private const val MICROPHONE_PERMISSION_REQUEST = 1001
         private const val CAMERA_PERMISSION_REQUEST = 1002
@@ -67,6 +77,12 @@ class MainActivity : Activity() {
         private const val WAKE_MIC_REQUEST = 1005
         private const val WAKE_NOTIF_REQUEST = 1006
         private const val WAKE_OVERLAY_REQUEST = 1007
+
+        // Same preference file and key the VIX overlay uses,
+        // so the app and the overlay always agree on the mode.
+        private const val MODE_PREFS = "vix_overlay"
+        private const val MODE_KEY = "mode"
+        private const val MODE_PHONE = "PHONE"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,6 +99,7 @@ class MainActivity : Activity() {
 
         updateWakeButton()
         updateAssistButton()
+        updateModeSwitches()
         restoreWakeService()
         handleWakeIntent(intent)
     }
@@ -181,6 +198,103 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(38)
+            ).apply { bottomMargin = dp(8) }
+        )
+
+        // Switch 1: VIX AI on = ask the AI, off = phone commands only.
+        aiModeTitle = TextView(this).apply {
+            textSize = 15f
+            setTextColor(textColor)
+        }
+        aiModeSub = TextView(this).apply {
+            textSize = 11f
+            setTextColor(mutedColor)
+        }
+
+        val aiTexts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(aiModeTitle)
+            addView(aiModeSub)
+        }
+
+        aiModeSwitch = Switch(this)
+        styleSwitch(aiModeSwitch)
+        aiModeSwitch.setOnCheckedChangeListener { _, checked ->
+            if (updatingSwitches) return@setOnCheckedChangeListener
+            getSharedPreferences(MODE_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(MODE_KEY, if (checked) "AI" else MODE_PHONE)
+                .apply()
+            updateModeSwitches()
+        }
+
+        val aiRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = roundedBackground(panelColor, 16)
+            addView(
+                aiTexts,
+                LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            )
+            addView(aiModeSwitch)
+        }
+
+        root.addView(
+            aiRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(6) }
+        )
+
+        // Switch 2: web search (only shown while VIX AI is on).
+        val searchTexts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "Web search"
+                textSize = 14f
+                setTextColor(textColor)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Live info from Google"
+                textSize = 11f
+                setTextColor(mutedColor)
+            })
+        }
+
+        searchSwitch = Switch(this)
+        styleSwitch(searchSwitch)
+        searchSwitch.setOnCheckedChangeListener { _, checked ->
+            if (updatingSwitches) return@setOnCheckedChangeListener
+            AiApiClient.setWebSearch(this, checked)
+        }
+
+        searchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = roundedBackground(panelColor, 16)
+            addView(
+                searchTexts,
+                LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
+            )
+            addView(searchSwitch)
+        }
+
+        root.addView(
+            searchRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(8) }
         )
 
@@ -329,6 +443,55 @@ class MainActivity : Activity() {
         }
 
         setContentView(root)
+    }
+
+    // ----------------------------------------------------------
+    // VIX AI mode and web search switches
+    // ----------------------------------------------------------
+
+    private fun isAiMode(): Boolean {
+        val saved = getSharedPreferences(MODE_PREFS, Context.MODE_PRIVATE)
+            .getString(MODE_KEY, "AI")
+        return saved != MODE_PHONE
+    }
+
+    /** Syncs both switches, their labels and the input hint with the saved mode. */
+    private fun updateModeSwitches() {
+        if (!::aiModeSwitch.isInitialized) return
+
+        val ai = isAiMode()
+
+        updatingSwitches = true
+        aiModeSwitch.isChecked = ai
+        searchSwitch.isChecked = AiApiClient.isWebSearchOn(this)
+        updatingSwitches = false
+
+        if (ai) {
+            aiModeTitle.text = "VIX AI"
+            aiModeSub.text = "On: questions go to the AI"
+            input.hint = "Message VIX AI..."
+        } else {
+            aiModeTitle.text = "Phone commands only"
+            aiModeSub.text = "AI is off: nothing is sent to the AI"
+            input.hint = "Say a phone command..."
+        }
+
+        searchRow.visibility = if (ai) View.VISIBLE else View.GONE
+    }
+
+    private fun styleSwitch(s: Switch) {
+        val states = arrayOf(
+            intArrayOf(android.R.attr.state_checked),
+            intArrayOf()
+        )
+        s.thumbTintList = ColorStateList(
+            states,
+            intArrayOf(Color.WHITE, mutedColor)
+        )
+        s.trackTintList = ColorStateList(
+            states,
+            intArrayOf(redColor, Color.rgb(70, 70, 82))
+        )
     }
 
     private fun addSuggestions() {
@@ -615,6 +778,17 @@ class MainActivity : Activity() {
             showReply(
                 localResult.message,
                 localResult.successful
+            )
+            return
+        }
+
+        // VIX AI is switched off: never forward anything to the AI.
+        if (!isAiMode()) {
+            showReply(
+                "I can't do that, or I don't know that command. " +
+                    "VIX AI is off, so I didn't send it to the AI. " +
+                    "Turn on VIX AI above if you want to ask it.",
+                false
             )
             return
         }
@@ -1090,6 +1264,8 @@ class MainActivity : Activity() {
         super.onResume()
         updateWakeButton()
         updateAssistButton()
+        // The overlay may have changed the mode while VIX was in the background.
+        updateModeSwitches()
 
         // Tell the user what the capture service did while VIX was hidden.
         val report = ScreenCaptureService.takePendingReport()
