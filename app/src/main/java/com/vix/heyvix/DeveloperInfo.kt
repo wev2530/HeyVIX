@@ -5,20 +5,8 @@ import android.content.Intent
 import android.net.Uri
 
 /**
- * Answers "who is your developer / how do I contact the developer"
- * questions locally, in AI mode and in phone assistant mode alike.
- * No AI call and no internet are needed for this answer.
- */
-object DeveloperInfo package com.vix.heyvix
-
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-
-/**
- * Answers "who is your developer / how do I contact the developer"
- * questions locally, in AI mode and in phone assistant mode alike.
- * No AI call and no internet are needed for this answer.
+ * Answers questions about the VIX AI developer locally.
+ * No AI call or internet connection is needed.
  */
 object DeveloperInfo {
 
@@ -65,11 +53,11 @@ object DeveloperInfo {
         return hasRole && contextPhrases.any { t.contains(it) }
     }
 
-    /** One short line shown above the business card. */
+    /** Short line shown above the developer card. */
     fun shortMessage(): String =
         "VIX AI was designed and developed by $NAME."
 
-    /** Plain text version (link included). */
+    /** Text version including the contact link. */
     fun message(): String =
         "VIX AI developer\n\n" +
             "$NAME\n" +
@@ -77,17 +65,20 @@ object DeveloperInfo {
             "Focus: upcoming apps and AI\n" +
             "WhatsApp: $WHATSAPP_LINK"
 
-    /** Read aloud. "G C V" so the voice spells it out. */
+    /** Text used for spoken responses. */
     fun spokenMessage(): String =
         "VIX AI was designed and built by G C V Designs, who works on " +
             "upcoming apps and A I. You can message the developer on " +
             "WhatsApp. The contact card is on your screen."
 
-    /** Opens the WhatsApp chat. Returns false if nothing could open it. */
+    /** Opens WhatsApp. Returns false if the action fails. */
     fun openWhatsApp(context: Context): Boolean {
         return try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(WHATSAPP_LINK))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val intent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse(WHATSAPP_LINK)
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
             context.startActivity(intent)
             true
         } catch (_: Exception) {
