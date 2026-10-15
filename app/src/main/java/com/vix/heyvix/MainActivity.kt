@@ -2,6 +2,7 @@ package com.vix.heyvix
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -45,6 +46,7 @@ class MainActivity : Activity() {
     private lateinit var voiceController: VoiceController
     private lateinit var speechOutput: VixSpeechOutput
     private lateinit var aiApiClient: AiApiClient
+    private lateinit var tavilyClient: TavilyClient
 
     private var pendingCommand: String? = null
     private var listening = false
@@ -54,7 +56,7 @@ class MainActivity : Activity() {
     // waiting for the user's yes / no to forward it to the AI.
     private var pendingForward: String? = null
 
-    // The "VIX AI is typing" row shown while waiting for the AI.
+    // The "VIX AI is typing" row shown while waiting for the AI or the web.
     private var typingRow: LinearLayout? = null
 
     // Screenshot / screen recording waiting for Android's permission dialog.
@@ -64,6 +66,10 @@ class MainActivity : Activity() {
     private lateinit var wakeButton: Button
     private lateinit var assistButton: Button
     private var wakeNotifAsked = false
+
+    // Voice and speed buttons.
+    private lateinit var voiceButton: Button
+    private lateinit var speedButton: Button
 
     // VIX AI mode + web search switches (shared with the overlay).
     private lateinit var aiModeTitle: TextView
@@ -97,6 +103,7 @@ class MainActivity : Activity() {
 
         commandRouter = LocalCommandRouter(this)
         aiApiClient = AiApiClient(this)
+        tavilyClient = TavilyClient(this)
 
         buildInterface()
         setupVoice()
@@ -104,6 +111,7 @@ class MainActivity : Activity() {
         updateWakeButton()
         updateAssistButton()
         updateModeSwitches()
+        updateVoiceButtons()
         restoreWakeService()
         handleWakeIntent(intent)
     }
@@ -202,6 +210,50 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(38)
+            ).apply { bottomMargin = dp(6) }
+        )
+
+        // Voice and speed of the assistant's spoken replies.
+        val voiceRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        voiceButton = Button(this).apply {
+            isAllCaps = false
+            textSize = 11f
+            text = "VOICE · tap to change"
+            setTextColor(textColor)
+            setPadding(dp(10), 0, dp(10), 0)
+            background = roundedBackground(panelColor, 16)
+            setOnClickListener { onVoiceClicked() }
+        }
+
+        speedButton = Button(this).apply {
+            isAllCaps = false
+            textSize = 11f
+            text = "SPEED · Normal"
+            setTextColor(textColor)
+            setPadding(dp(10), 0, dp(10), 0)
+            background = roundedBackground(panelColor, 16)
+            setOnClickListener { onSpeedClicked() }
+        }
+
+        voiceRow.addView(
+            voiceButton,
+            LinearLayout.LayoutParams(0, dp(38), 1.4f).apply {
+                marginEnd = dp(6)
+            }
+        )
+        voiceRow.addView(
+            speedButton,
+            LinearLayout.LayoutParams(0, dp(38), 1f)
+        )
+
+        root.addView(
+            voiceRow,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(8) }
         )
 
@@ -500,6 +552,54 @@ class MainActivity : Activity() {
         )
     }
 
+    // ----------------------------------------------------------
+    // Voice and speed of the spoken replies
+    // ----------------------------------------------------------
+
+    private fun updateVoiceButtons() {
+        if (!::voiceButton.isInitialized || !::speechOutput.isInitialized) return
+
+        voiceButton.text = "VOICE · tap to change"
+        speedButton.text = "SPEED · ${speechOutput.speedLabel()}"
+    }
+
+    private fun onVoiceClicked() {
+        val options = speechOutput.voiceOptions()
+
+        if (options.isEmpty()) {
+            showReply(
+                "The voices aren't ready yet. Try again in a moment. " +
+                    "You can also change the voice in Settings, " +
+                    "Text-to-speech output.",
+                false
+            )
+            return
+        }
+
+        val labels = options.map { it.label }.toTypedArray()
+        val current = options
+            .indexOfFirst { it.name == speechOutput.currentVoiceName() }
+            .coerceAtLeast(0)
+        var chosen = current
+
+        AlertDialog.Builder(this)
+            .setTitle("Choose a voice")
+            .setSingleChoiceItems(labels, current) { _, which ->
+                chosen = which
+            }
+            .setPositiveButton("Use it") { _, _ ->
+                speechOutput.chooseVoice(options[chosen].name)
+                updateVoiceButtons()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun onSpeedClicked() {
+        speechOutput.cycleSpeed()
+        updateVoiceButtons()
+    }
+
     private fun addSuggestions() {
         val heading = TextView(this).apply {
             text = "TRY A QUICK COMMAND"
@@ -657,6 +757,27 @@ class MainActivity : Activity() {
             return
         }
 
+        // "/tavilykey tvly-..." saves the Tavily web search key privately
+        // on this phone, also never shown as a chat bubble.
+        if (command.startsWith("/tavilykey ", ignoreCase = true)) {
+            input.text.clear()
+            val key = command.substring(11).trim()
+
+            if (key.isEmpty()) {
+                addMessage("Type /tavilykey followed by your Tavily key.", false)
+            } else {
+                TavilyClient.saveKey(this, key)
+                addMessage(
+                    "Tavily key saved on this phone. I can now look up " +
+                        "live info, like \"latest news on...\" or " +
+                        "\"search for...\".",
+                    false
+                )
+                status.text = "DONE"
+            }
+            return
+        }
+
         if (requestInProgress) {
             Toast.makeText(
                 this,
@@ -786,6 +907,15 @@ class MainActivity : Activity() {
             return
         }
 
+        // Live info (news, scores, prices, weather, "search for ...") is
+        // looked up by the assistant itself with Tavily, with AI on or off.
+        // Without a Tavily key this is skipped and the old behavior stays.
+        val liveRequest = LiveInfo.parse(rawCommand)
+        if (liveRequest != null && TavilyClient.hasKey(this)) {
+            sendToWeb(liveRequest)
+            return
+        }
+
         // Execute recognized local commands without sending them to the AI.
         val localResult = commandRouter.handle(rawCommand)
 
@@ -853,6 +983,28 @@ class MainActivity : Activity() {
             showReply(
                 aiResult.message,
                 aiResult.successful
+            )
+        }
+    }
+
+    /** Looks up live info on the web with Tavily and shows a short reply. */
+    private fun sendToWeb(request: LiveInfo.Request) {
+        requestInProgress = true
+
+        status.text = "SEARCHING THE WEB…"
+        showTyping()
+
+        tavilyClient.search(request) { webResult ->
+            if (isFinishing || isDestroyed) {
+                return@search
+            }
+
+            requestInProgress = false
+            hideTyping()
+
+            showReply(
+                webResult.message,
+                webResult.successful
             )
         }
     }
@@ -1307,6 +1459,7 @@ class MainActivity : Activity() {
         updateAssistButton()
         // The overlay may have changed the mode while VIX was in the background.
         updateModeSwitches()
+        updateVoiceButtons()
 
         // Tell the user what the capture service did while VIX was hidden.
         val report = ScreenCaptureService.takePendingReport()
@@ -1329,6 +1482,10 @@ class MainActivity : Activity() {
 
         if (::aiApiClient.isInitialized) {
             aiApiClient.close()
+        }
+
+        if (::tavilyClient.isInitialized) {
+            tavilyClient.close()
         }
 
         super.onDestroy()

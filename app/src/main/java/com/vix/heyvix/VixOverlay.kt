@@ -26,6 +26,9 @@ import android.widget.TextView
  *
  * With AI off, an unknown command is never sent to the AI automatically.
  * The overlay asks "forward to VIX AI? yes or no" first.
+ *
+ * Live info requests (news, scores, prices, weather, "search for ...") are
+ * answered by the assistant itself with Tavily when a Tavily key is saved.
  */
 class VixOverlayPanel(
     private val context: Context,
@@ -54,6 +57,7 @@ class VixOverlayPanel(
 
     private var router: LocalCommandRouter? = null
     private var ai: AiApiClient? = null
+    private var tavily: TavilyClient? = null
     private var voice: VoiceController? = null
     private var speaker: VixSpeechOutput? = null
 
@@ -318,6 +322,7 @@ class VixOverlayPanel(
         voice?.destroy(); voice = null
         speaker?.stop(); speaker?.shutdown(); speaker = null
         ai?.close(); ai = null
+        tavily?.close(); tavily = null
     }
 
     // ---------------- Voice ----------------
@@ -419,6 +424,15 @@ class VixOverlayPanel(
             return
         }
 
+        // Live info (news, scores, prices, weather, "search for ...") is
+        // looked up by the assistant itself with Tavily, with AI on or off.
+        // Without a Tavily key this is skipped and the old behavior stays.
+        val liveRequest = LiveInfo.parse(text)
+        if (liveRequest != null && TavilyClient.hasKey(context)) {
+            askWeb(liveRequest)
+            return
+        }
+
         if (mode == Mode.PHONE) {
             runPhoneCommand(text)
         } else {
@@ -488,14 +502,43 @@ class VixOverlayPanel(
             showReply(result.message)
 
             if (result.successful) {
-                val s = speaker ?: VixSpeechOutput(
-                    context,
-                    { speaking -> if (speaking) status.text = "VIX AI IS SPEAKING…" },
-                    { }
-                ).also { speaker = it }
-                s.speak(result.message)
+                speakReply(result.message)
             }
         }
+    }
+
+    /** The assistant looks up live info on the web with Tavily. */
+    private fun askWeb(request: LiveInfo.Request) {
+        busy = true
+        status.text = "SEARCHING THE WEB…"
+        typing.visibility = View.VISIBLE
+        typing.start()
+
+        val client = tavily ?: TavilyClient(context).also { tavily = it }
+
+        client.search(request) { result ->
+            if (tavily == null) return@search // overlay was closed
+
+            busy = false
+            typing.stop()
+            typing.visibility = View.GONE
+
+            status.text = if (result.successful) "DONE" else "NEEDS ATTENTION"
+            showReply(result.message)
+
+            if (result.successful) {
+                speakReply(result.message)
+            }
+        }
+    }
+
+    private fun speakReply(message: String) {
+        val s = speaker ?: VixSpeechOutput(
+            context,
+            { speaking -> if (speaking) status.text = "VIX AI IS SPEAKING…" },
+            { }
+        ).also { speaker = it }
+        s.speak(message)
     }
 
     private fun showReply(message: String) {
