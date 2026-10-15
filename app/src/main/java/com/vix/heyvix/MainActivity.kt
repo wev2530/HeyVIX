@@ -50,6 +50,10 @@ class MainActivity : Activity() {
     private var listening = false
     private var requestInProgress = false
 
+    // A question the phone assistant couldn't handle (AI is off),
+    // waiting for the user's yes / no to forward it to the AI.
+    private var pendingForward: String? = null
+
     // The "VIX AI is typing" row shown while waiting for the AI.
     private var typingRow: LinearLayout? = null
 
@@ -225,6 +229,8 @@ class MainActivity : Activity() {
                 .edit()
                 .putString(MODE_KEY, if (checked) "AI" else MODE_PHONE)
                 .apply()
+            // A pending "forward to AI?" question no longer applies.
+            pendingForward = null
             updateModeSwitches()
         }
 
@@ -472,7 +478,7 @@ class MainActivity : Activity() {
             input.hint = "Message VIX AI..."
         } else {
             aiModeTitle.text = "Phone commands only"
-            aiModeSub.text = "AI is off: nothing is sent to the AI"
+            aiModeSub.text = "AI is off: I ask before sending anything to the AI"
             input.hint = "Say a phone command..."
         }
 
@@ -748,6 +754,29 @@ class MainActivity : Activity() {
     }
 
     private fun handleCommand(rawCommand: String) {
+        // The assistant asked "forward to VIX AI?" and is waiting for yes / no.
+        val waiting = pendingForward
+        if (waiting != null) {
+            pendingForward = null
+
+            when (YesNo.parse(rawCommand)) {
+                true -> {
+                    // One time only, and never with web search (AI mode is off).
+                    sendToAi(waiting, allowSearch = false)
+                    return
+                }
+
+                false -> {
+                    showReply("Okay, I won't send it to VIX AI.", true)
+                    return
+                }
+
+                null -> {
+                    // Not a yes or no: treat it as a new command below.
+                }
+            }
+        }
+
         status.text = "WORKING…"
 
         // Screenshot and screen recording are handled before the router.
@@ -782,18 +811,30 @@ class MainActivity : Activity() {
             return
         }
 
-        // VIX AI is switched off: never forward anything to the AI.
+        // VIX AI is switched off: never forward to the AI automatically.
+        // Tell the user, and ask if it should be forwarded just this once.
         if (!isAiMode()) {
+            pendingForward = rawCommand
+
             showReply(
-                "I can't do that, or I don't know that command. " +
-                    "VIX AI is off, so I didn't send it to the AI. " +
-                    "Turn on VIX AI above if you want to ask it.",
-                false
+                "I can't do that, and VIX AI is off, so I didn't send it. " +
+                    "Want me to forward it to VIX AI just this once? " +
+                    "Say yes or no.",
+                true
             )
+            status.text = "WAITING FOR YES OR NO"
             return
         }
 
-        // Send general questions to the configured VIX AI API.
+        // AI is on: send general questions to the configured VIX AI API.
+        sendToAi(rawCommand)
+    }
+
+    /**
+     * Sends one message to the AI and shows the reply.
+     * allowSearch = false forces web search off for this one message.
+     */
+    private fun sendToAi(text: String, allowSearch: Boolean = true) {
         requestInProgress = true
 
         // No "CONTACTING VIX AI…" text: show the breathing logo
@@ -801,7 +842,7 @@ class MainActivity : Activity() {
         status.text = "YOUR PERSONAL ASSISTANT"
         showTyping()
 
-        aiApiClient.sendMessage(rawCommand) { aiResult ->
+        aiApiClient.sendMessage(text, allowSearch) { aiResult ->
             if (isFinishing || isDestroyed) {
                 return@sendMessage
             }

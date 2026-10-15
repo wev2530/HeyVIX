@@ -23,6 +23,9 @@ import android.widget.TextView
  * The VIX overlay: a bottom sheet shown over any app.
  * Switch 1: VIX AI on = ask the AI, off = phone assistant commands.
  * Switch 2 (only when AI is on): web search on or off.
+ *
+ * With AI off, an unknown command is never sent to the AI automatically.
+ * The overlay asks "forward to VIX AI? yes or no" first.
  */
 class VixOverlayPanel(
     private val context: Context,
@@ -45,6 +48,9 @@ class VixOverlayPanel(
     private var listening = false
     private var busy = false
     private var updating = false // true while code (not the user) moves a switch
+
+    // A question the phone assistant couldn't handle, waiting for yes / no.
+    private var pendingForward: String? = null
 
     private var router: LocalCommandRouter? = null
     private var ai: AiApiClient? = null
@@ -279,6 +285,7 @@ class VixOverlayPanel(
     fun onShown() {
         busy = false
         listening = false
+        pendingForward = null
         reply.visibility = View.GONE
         typing.stop(); typing.visibility = View.GONE
         input.setText("")
@@ -306,6 +313,7 @@ class VixOverlayPanel(
         searchRow.animate().cancel()
         listening = false
         busy = false
+        pendingForward = null
         typing.stop()
         voice?.destroy(); voice = null
         speaker?.stop(); speaker?.shutdown(); speaker = null
@@ -383,6 +391,27 @@ class VixOverlayPanel(
         micButton.text = "🎙"
         showReply("You: $text")
 
+        // The assistant asked "forward to VIX AI?" and is waiting for yes / no.
+        val waiting = pendingForward
+        if (waiting != null) {
+            pendingForward = null
+            when (YesNo.parse(text)) {
+                true -> {
+                    // One time only, and never with web search (AI mode is off).
+                    askAi(waiting, allowSearch = false)
+                    return
+                }
+                false -> {
+                    status.text = "READY"
+                    showReply("Okay, I won't send it to VIX AI.")
+                    return
+                }
+                null -> {
+                    // Not a yes or no: treat it as a new command below.
+                }
+            }
+        }
+
         // Screenshots and recording need Android's permission screen,
         // so they continue inside the VIX app.
         if (ScreenCaptureController.parse(text) != null) {
@@ -402,8 +431,21 @@ class VixOverlayPanel(
 
         when {
             !r.handled -> {
-                status.text = "NEEDS ATTENTION"
-                showReply("That isn't a phone command I know. Turn VIX AI on to ask it.")
+                // Never forward to the AI automatically: ask first.
+                pendingForward = text
+                status.text = "WAITING FOR YES OR NO"
+                showReply(
+                    "I can't do that, and VIX AI is off, so I didn't send it. " +
+                        "Want me to forward it to VIX AI just this once? " +
+                        "Say yes or no."
+                )
+
+                if (
+                    context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
+                ) {
+                    handler.postDelayed({ startListening() }, 600)
+                }
             }
 
             r.needsCameraPermission -> openVix(text)
@@ -418,15 +460,19 @@ class VixOverlayPanel(
         }
     }
 
-    private fun askAi(text: String) {
+    private fun askAi(text: String, allowSearch: Boolean = true) {
         busy = true
-        status.text = if (searchSwitch.isChecked) "VIX AI IS SEARCHING…" else "VIX AI IS THINKING…"
+        status.text = if (allowSearch && searchSwitch.isChecked) {
+            "VIX AI IS SEARCHING…"
+        } else {
+            "VIX AI IS THINKING…"
+        }
         typing.visibility = View.VISIBLE
         typing.start()
 
         val client = ai ?: AiApiClient(context).also { ai = it }
 
-        client.sendMessage(text) { result ->
+        client.sendMessage(text, allowSearch) { result ->
             if (ai == null) return@sendMessage // overlay was closed
 
             busy = false
@@ -435,7 +481,7 @@ class VixOverlayPanel(
 
             status.text = when {
                 !result.successful -> "NEEDS ATTENTION"
-                searchSwitch.isChecked && AiApiClient.searchBlocked ->
+                allowSearch && searchSwitch.isChecked && AiApiClient.searchBlocked ->
                     "DONE · NO WEB SEARCH ON THIS KEY"
                 else -> "DONE"
             }

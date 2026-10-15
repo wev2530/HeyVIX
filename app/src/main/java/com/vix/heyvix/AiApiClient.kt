@@ -23,6 +23,7 @@ import java.util.concurrent.Executors
  *   model, system_prompt, timeout_seconds
  *
  * Web search is controlled by the switch in the VIX overlay (off by default).
+ * A single call can also force search off with allowSearch = false.
  */
 class AiApiClient(context: Context) {
 
@@ -98,10 +99,18 @@ class AiApiClient(context: Context) {
         appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_API, "") ?: ""
 
-    fun sendMessage(message: String, callback: (Result) -> Unit) {
+    /**
+     * allowSearch = false forces web search off for this one call,
+     * even if the web search switch is on.
+     */
+    fun sendMessage(
+        message: String,
+        allowSearch: Boolean = true,
+        callback: (Result) -> Unit
+    ) {
         executor.execute {
             val result = try {
-                askGemini(message)
+                askGemini(message, allowSearch)
             } catch (e: Exception) {
                 Result(false, "VIX AI connection error: " + describe(e))
             }
@@ -109,7 +118,7 @@ class AiApiClient(context: Context) {
         }
     }
 
-    private fun askGemini(message: String): Result {
+    private fun askGemini(message: String, allowSearch: Boolean): Result {
         val key = apiKey()
         if (key.isBlank()) {
             return Result(
@@ -152,8 +161,9 @@ class AiApiClient(context: Context) {
 
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
 
-        // Search only when the switch is on AND Google has not refused it for this key.
-        val searchNow = isWebSearchOn(appContext) && !searchRefused
+        // Search only when this call allows it, the switch is on,
+        // AND Google has not refused it for this key.
+        val searchNow = allowSearch && isWebSearchOn(appContext) && !searchRefused
 
         val response = try {
             postJson(url, key, bodyFor(searchNow), timeoutMs)
