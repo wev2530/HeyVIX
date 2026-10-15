@@ -9,8 +9,20 @@ import android.net.Uri
  * questions locally, in AI mode and in phone assistant mode alike.
  * No AI call and no internet are needed for this answer.
  */
+object DeveloperInfo package com.vix.heyvix
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+
+/**
+ * Answers "who is your developer / how do I contact the developer"
+ * questions locally, in AI mode and in phone assistant mode alike.
+ * No AI call and no internet are needed for this answer.
+ */
 object DeveloperInfo {
 
+    const val NAME = "GCV Designs"
     const val WHATSAPP_LINK = "https://wa.me/2348126844814"
 
     private val strongPhrases = listOf(
@@ -22,7 +34,8 @@ object DeveloperInfo {
         " who made vix", " who created vix", " who built vix",
         " who developed vix", " who designed vix",
         " who made vixie", " who created vixie", " who built vixie",
-        " who developed vixie", " who designed vixie"
+        " who developed vixie", " who designed vixie",
+        " gcv designs"
     )
 
     private val roleWords = listOf(
@@ -52,20 +65,23 @@ object DeveloperInfo {
         return hasRole && contextPhrases.any { t.contains(it) }
     }
 
-    /** The formatted message shown on screen. */
-    fun message(): String =
-        "VIX AI developer details\n\n" +
-            "Role: Designer and developer of VIX AI\n" +
-            "Focus: Upcoming apps and AI\n" +
-            "Contact: WhatsApp\n" +
-            "$WHATSAPP_LINK\n\n" +
-            "Tap the button below to message the developer."
+    /** One short line shown above the business card. */
+    fun shortMessage(): String =
+        "VIX AI was designed and developed by $NAME."
 
-    /** A shorter version for reading aloud (no link read out). */
+    /** Plain text version (link included). */
+    fun message(): String =
+        "VIX AI developer\n\n" +
+            "$NAME\n" +
+            "Designer and developer of VIX AI\n" +
+            "Focus: upcoming apps and AI\n" +
+            "WhatsApp: $WHATSAPP_LINK"
+
+    /** Read aloud. "G C V" so the voice spells it out. */
     fun spokenMessage(): String =
-        "I was designed and built by my developer, who works on upcoming " +
-            "apps and AI. You can message the developer on WhatsApp. " +
-            "The button is on your screen."
+        "VIX AI was designed and built by G C V Designs, who works on " +
+            "upcoming apps and A I. You can message the developer on " +
+            "WhatsApp. The contact card is on your screen."
 
     /** Opens the WhatsApp chat. Returns false if nothing could open it. */
     fun openWhatsApp(context: Context): Boolean {

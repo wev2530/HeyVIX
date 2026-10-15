@@ -72,7 +72,7 @@ class VixOverlayPanel(
     private val searchRow = LinearLayout(context)
     private val searchSwitch = Switch(context)
     private val reply = TextView(context)
-    private val whatsappButton = Button(context)
+    private val developerHolder = FrameLayout(context)
     private val typing = TypingIndicatorView(context)
     private val input = EditText(context)
     private val micButton = Button(context)
@@ -171,30 +171,9 @@ class VixOverlayPanel(
         }
         sheet.addView(reply, fullWidth(topMargin = 10))
 
-        // "Message the developer on WhatsApp" (only shown with the developer answer)
-        whatsappButton.apply {
-            text = "Message the developer on WhatsApp"
-            textSize = 13f
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            setPadding(dp(14), 0, dp(14), 0)
-            background = rounded(redColor, 14)
-            visibility = View.GONE
-            setOnClickListener {
-                if (DeveloperInfo.openWhatsApp(context)) {
-                    closePanel()
-                } else {
-                    status.text = "COULD NOT OPEN WHATSAPP"
-                }
-            }
-        }
-        sheet.addView(
-            whatsappButton,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(44)
-            ).apply { topMargin = dp(8) }
-        )
+                // Developer business card (only shown for developer questions)
+        developerHolder.visibility = View.GONE
+        sheet.addView(developerHolder, fullWidth(topMargin = 8))
 
         typing.visibility = View.GONE
         sheet.addView(
@@ -320,7 +299,7 @@ class VixOverlayPanel(
         listening = false
         pendingForward = null
         reply.visibility = View.GONE
-        whatsappButton.visibility = View.GONE
+        developerHolder.visibility = View.GONE
         typing.stop(); typing.visibility = View.GONE
         input.setText("")
         status.text = "READY"
@@ -477,11 +456,23 @@ class VixOverlayPanel(
         }
     }
 
-    /** Shows the developer details, a WhatsApp button, and reads a short version aloud. */
+    /** Shows the developer details, a WhatsApp button, and reads a short version aloud. */    /** Shows the developer business card and reads a short version aloud. */
     private fun showDeveloper() {
         status.text = "DONE"
-        showReply(DeveloperInfo.message())
-        whatsappButton.visibility = View.VISIBLE
+        showReply(DeveloperInfo.shortMessage())
+
+        developerHolder.removeAllViews()
+        developerHolder.addView(
+            DeveloperCard.build(context) {
+                if (DeveloperInfo.openWhatsApp(context)) {
+                    closePanel()
+                } else {
+                    status.text = "COULD NOT OPEN WHATSAPP"
+                }
+            }
+        )
+        developerHolder.visibility = View.VISIBLE
+
         speakReply(DeveloperInfo.spokenMessage())
     }
 
@@ -588,11 +579,48 @@ class VixOverlayPanel(
 
     private fun showReply(message: String) {
         // Any new reply hides the WhatsApp button; the developer answer shows it again.
-        whatsappButton.visibility = View.GONE
+        developerHolder.visibility = View.GONE
         reply.text = message
         reply.visibility = View.VISIBLE
     }
 
     // ---------------- Helpers ----------------
 
-    private fun switchRow(texts: View, sw: Switch) = LinearLayout
+        private fun switchRow(texts: View, sw: Switch) = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(sw)
+    }
+
+    private fun styleSwitch(s: Switch) {
+        val states = arrayOf(
+            intArrayOf(android.R.attr.state_checked),
+            intArrayOf()
+        )
+        s.thumbTintList = ColorStateList(states, intArrayOf(Color.WHITE, mutedColor))
+        s.trackTintList = ColorStateList(states, intArrayOf(redColor, Color.rgb(70, 70, 82)))
+    }
+
+    private fun fullWidth(topMargin: Int) = LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+    ).apply { this.topMargin = dp(topMargin) }
+
+    private fun smallText(label: String, onClick: () -> Unit) =
+        TextView(context).apply {
+            text = label
+            textSize = 12f
+            setTextColor(mutedColor)
+            setPadding(dp(10), dp(6), dp(4), dp(6))
+            setOnClickListener { onClick() }
+        }
+
+    private fun rounded(color: Int, radiusDp: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radiusDp).toFloat()
+    }
+
+    private fun dp(v: Int) =
+        (v * context.resources.displayMetrics.density).toInt()
+}
