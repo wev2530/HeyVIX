@@ -15,17 +15,24 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.SpeechRecognizer
+import android.text.TextUtils
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import kotlin.math.abs
 
 class MainActivity : Activity() {
 
@@ -78,6 +85,11 @@ class MainActivity : Activity() {
     private lateinit var searchRow: LinearLayout
     private lateinit var searchSwitch: Switch
     private var updatingSwitches = false
+
+    // Swipe-to-reply: the message the user is replying to, and its bar.
+    private var replyingTo: String? = null
+    private lateinit var replyBar: LinearLayout
+    private lateinit var replyPreview: TextView
 
     companion object {
         private const val MICROPHONE_PERMISSION_REQUEST = 1001
@@ -385,6 +397,69 @@ class MainActivity : Activity() {
 
         addSuggestions()
 
+        // "Replying to ..." bar, shown above the typing box after a swipe.
+        replyBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(8), dp(6), dp(8))
+            background = roundedBackground(Color.rgb(36, 36, 46), 14)
+            visibility = View.GONE
+        }
+
+        replyBar.addView(
+            View(this).apply { setBackgroundColor(redColor) },
+            LinearLayout.LayoutParams(
+                dp(3),
+                LinearLayout.LayoutParams.MATCH_PARENT
+            ).apply { marginEnd = dp(10) }
+        )
+
+        replyPreview = TextView(this).apply {
+            textSize = 12f
+            setTextColor(mutedColor)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }
+
+        val replyTexts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "Replying to"
+                textSize = 11f
+                setTextColor(redColor)
+            })
+            addView(replyPreview)
+        }
+
+        replyBar.addView(
+            replyTexts,
+            LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+        )
+
+        val replyCancel = TextView(this).apply {
+            text = "✕"
+            textSize = 16f
+            setTextColor(mutedColor)
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            contentDescription = "Cancel reply"
+            setOnClickListener { clearReply() }
+        }
+
+        replyBar.addView(replyCancel)
+
+        root.addView(
+            replyBar,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        )
+
         // Message composer
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -534,6 +609,10 @@ class MainActivity : Activity() {
             input.hint = "Say a phone command..."
         }
 
+        if (replyingTo != null) {
+            input.hint = "Type your reply..."
+        }
+
         searchRow.visibility = if (ai) View.VISIBLE else View.GONE
     }
 
@@ -549,961 +628,4 @@ class MainActivity : Activity() {
         s.trackTintList = ColorStateList(
             states,
             intArrayOf(redColor, Color.rgb(70, 70, 82))
-        )
-    }
-
-    // ----------------------------------------------------------
-    // Voice and speed of the spoken replies
-    // ----------------------------------------------------------
-
-    private fun updateVoiceButtons() {
-        if (!::voiceButton.isInitialized || !::speechOutput.isInitialized) return
-
-        voiceButton.text = "VOICE · tap to change"
-        speedButton.text = "SPEED · ${speechOutput.speedLabel()}"
-    }
-
-    private fun onVoiceClicked() {
-        val options = speechOutput.voiceOptions()
-
-        if (options.isEmpty()) {
-            showReply(
-                "The voices aren't ready yet. Try again in a moment. " +
-                    "You can also change the voice in Settings, " +
-                    "Text-to-speech output.",
-                false
-            )
-            return
-        }
-
-        val labels = options.map { it.label }.toTypedArray()
-        val current = options
-            .indexOfFirst { it.name == speechOutput.currentVoiceName() }
-            .coerceAtLeast(0)
-        var chosen = current
-
-        AlertDialog.Builder(this)
-            .setTitle("Choose a voice")
-            .setSingleChoiceItems(labels, current) { _, which ->
-                chosen = which
-            }
-            .setPositiveButton("Use it") { _, _ ->
-                speechOutput.chooseVoice(options[chosen].name)
-                updateVoiceButtons()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun onSpeedClicked() {
-        speechOutput.cycleSpeed()
-        updateVoiceButtons()
-    }
-
-    private fun addSuggestions() {
-        val heading = TextView(this).apply {
-            text = "TRY A QUICK COMMAND"
-            textSize = 10f
-            setTextColor(mutedColor)
-            setPadding(dp(4), dp(18), dp(4), dp(8))
-        }
-
-        conversation.addView(heading)
-
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        addSuggestion(row, "Flashlight on", "Turn on flashlight")
-        addSuggestion(row, "Open camera", "Open camera")
-
-        conversation.addView(row)
-    }
-
-    private fun addSuggestion(
-        row: LinearLayout,
-        label: String,
-        command: String
-    ) {
-        val chip = Button(this).apply {
-            text = label
-            textSize = 11f
-            isAllCaps = false
-            setTextColor(textColor)
-            setPadding(dp(8), 0, dp(8), 0)
-            background = roundedBackground(panelColor, 16)
-
-            setOnClickListener {
-                input.setText(command)
-                input.setSelection(input.text.length)
-                input.requestFocus()
-            }
-        }
-
-        row.addView(
-            chip,
-            LinearLayout.LayoutParams(0, dp(42), 1f).apply {
-                marginEnd = dp(6)
-            }
-        )
-    }
-
-    private fun addMessage(
-        message: String,
-        fromUser: Boolean
-    ) {
-        val bubble = TextView(this).apply {
-            text = message
-            textSize = 15f
-            setTextColor(textColor)
-            setTextIsSelectable(true)
-            setPadding(dp(14), dp(11), dp(14), dp(11))
-            background = roundedBackground(
-                if (fromUser) userBubbleColor else panelColor,
-                16
-            )
-        }
-
-        val line = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = if (fromUser) Gravity.END else Gravity.START
-            setPadding(0, dp(5), 0, dp(5))
-
-            addView(
-                bubble,
-                LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    0.88f
-                )
-            )
-        }
-
-        conversation.addView(line)
-
-        conversationScroll.post {
-            conversationScroll.fullScroll(View.FOCUS_DOWN)
-        }
-    }
-
-    // ----------------------------------------------------------
-    // "VIX AI is typing" indicator (breathing logo + three dots)
-    // ----------------------------------------------------------
-
-    private fun showTyping() {
-        if (typingRow != null) {
-            return
-        }
-
-        val indicator = TypingIndicatorView(this)
-
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.START
-            setPadding(0, dp(5), 0, dp(5))
-
-            addView(
-                indicator,
-                LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-            )
-        }
-
-        conversation.addView(row)
-        indicator.start()
-        typingRow = row
-
-        conversationScroll.post {
-            conversationScroll.fullScroll(View.FOCUS_DOWN)
-        }
-    }
-
-    private fun hideTyping() {
-        val row = typingRow ?: return
-
-        (row.getChildAt(0) as? TypingIndicatorView)?.stop()
-        conversation.removeView(row)
-        typingRow = null
-    }
-
-    private fun submitTypedMessage() {
-        val command = input.text.toString().trim()
-
-        if (command.isEmpty()) {
-            Toast.makeText(
-                this,
-                "Type a message first.",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        // "/key AIza..." saves the Gemini API key privately on this phone.
-        // It is handled here so the key is never shown as a chat bubble.
-        if (command.startsWith("/key ", ignoreCase = true)) {
-            input.text.clear()
-            val key = command.substring(5).trim()
-
-            if (key.isEmpty()) {
-                addMessage("Type /key followed by your Gemini API key.", false)
-            } else {
-                AiApiClient.saveKey(this, key)
-                addMessage("Gemini key saved on this phone.", false)
-                status.text = "DONE"
-            }
-            return
-        }
-
-        // "/tavilykey tvly-..." saves the Tavily web search key privately
-        // on this phone, also never shown as a chat bubble.
-        if (command.startsWith("/tavilykey ", ignoreCase = true)) {
-            input.text.clear()
-            val key = command.substring(11).trim()
-
-            if (key.isEmpty()) {
-                addMessage("Type /tavilykey followed by your Tavily key.", false)
-            } else {
-                TavilyClient.saveKey(this, key)
-                addMessage(
-                    "Tavily key saved on this phone. I can now look up " +
-                        "live info, like \"latest news on...\" or " +
-                        "\"search for...\".",
-                    false
-                )
-                status.text = "DONE"
-            }
-            return
-        }
-
-        if (requestInProgress) {
-            Toast.makeText(
-                this,
-                "Please wait for the current reply.",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        input.text.clear()
-        addMessage(command, true)
-        handleCommand(command)
-    }
-
-    private fun setupVoice() {
-        voiceController = VoiceController(
-            this,
-            object : VoiceController.Listener {
-
-                override fun onListening() {
-                    listening = true
-                    status.text = "LISTENING… SPEAK NOW"
-                    micButton.text = "■"
-                    addMessage("Listening…", false)
-                }
-
-                override fun onPartial(text: String) {
-                    status.text = "HEARING: $text"
-                }
-
-                override fun onFinal(text: String) {
-                    listening = false
-                    micButton.text = "🎙"
-
-                    if (text.isBlank()) {
-                        status.text = "YOUR PERSONAL ASSISTANT"
-                        return
-                    }
-
-                    addMessage(text, true)
-                    handleCommand(text)
-                }
-
-                override fun onError(message: String) {
-                    listening = false
-                    micButton.text = "🎙"
-                    status.text = "YOUR PERSONAL ASSISTANT"
-                    addMessage(message, false)
-                }
-            }
-        )
-
-        speechOutput = VixSpeechOutput(
-            this,
-            { speaking ->
-                if (speaking) {
-                    status.text = "VIX AI IS SPEAKING…"
-                } else if (status.text == "VIX AI IS SPEAKING…") {
-                    status.text = "YOUR PERSONAL ASSISTANT"
-                }
-            },
-            { message ->
-                Toast.makeText(
-                    this,
-                    message,
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        )
-    }
-
-    private fun startVoiceInput() {
-        if (requestInProgress) {
-            Toast.makeText(
-                this,
-                "Please wait for the current reply.",
-                Toast.LENGTH_SHORT
-            ).show()
-            return
-        }
-
-        if (
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                MICROPHONE_PERMISSION_REQUEST
-            )
-            return
-        }
-
-        speechOutput.stop()
-        voiceController.start()
-    }
-
-    private fun handleCommand(rawCommand: String) {
-        // The assistant asked "forward to VIX AI?" and is waiting for yes / no.
-        val waiting = pendingForward
-        if (waiting != null) {
-            pendingForward = null
-
-            when (YesNo.parse(rawCommand)) {
-                true -> {
-                    // One time only, and never with web search (AI mode is off).
-                    sendToAi(waiting, allowSearch = false)
-                    return
-                }
-
-                false -> {
-                    showReply("Okay, I won't send it to VIX AI.", true)
-                    return
-                }
-
-                null -> {
-                    // Not a yes or no: treat it as a new command below.
-                }
-            }
-        }
-
-        status.text = "WORKING…"
-
-        // Screenshot and screen recording are handled before the router.
-        val screenAction = ScreenCaptureController.parse(rawCommand)
-        if (screenAction != null) {
-            handleScreenAction(screenAction)
-            return
-        }
-
-        // Live info (news, scores, prices, weather, "search for ...") is
-        // looked up by the assistant itself with Tavily, with AI on or off.
-        // Without a Tavily key this is skipped and the old behavior stays.
-        val liveRequest = LiveInfo.parse(rawCommand)
-        if (liveRequest != null && TavilyClient.hasKey(this)) {
-            sendToWeb(liveRequest)
-            return
-        }
-
-        // Execute recognized local commands without sending them to the AI.
-        val localResult = commandRouter.handle(rawCommand)
-
-        if (localResult.handled) {
-            if (
-                localResult.needsCameraPermission &&
-                checkSelfPermission(Manifest.permission.CAMERA) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                pendingCommand = rawCommand
-
-                requestPermissions(
-                    arrayOf(Manifest.permission.CAMERA),
-                    CAMERA_PERMISSION_REQUEST
-                )
-                return
-            }
-
-            showReply(
-                localResult.message,
-                localResult.successful
-            )
-            return
-        }
-
-        // VIX AI is switched off: never forward to the AI automatically.
-        // Tell the user, and ask if it should be forwarded just this once.
-        if (!isAiMode()) {
-            pendingForward = rawCommand
-
-            showReply(
-                "I can't do that, and VIX AI is off, so I didn't send it. " +
-                    "Want me to forward it to VIX AI just this once? " +
-                    "Say yes or no.",
-                true
-            )
-            status.text = "WAITING FOR YES OR NO"
-            return
-        }
-
-        // AI is on: send general questions to the configured VIX AI API.
-        sendToAi(rawCommand)
-    }
-
-    /**
-     * Sends one message to the AI and shows the reply.
-     * allowSearch = false forces web search off for this one message.
-     */
-    private fun sendToAi(text: String, allowSearch: Boolean = true) {
-        requestInProgress = true
-
-        // No "CONTACTING VIX AI…" text: show the breathing logo
-        // and three typing dots in the conversation instead.
-        status.text = "YOUR PERSONAL ASSISTANT"
-        showTyping()
-
-        aiApiClient.sendMessage(text, allowSearch) { aiResult ->
-            if (isFinishing || isDestroyed) {
-                return@sendMessage
-            }
-
-            requestInProgress = false
-            hideTyping()
-
-            showReply(
-                aiResult.message,
-                aiResult.successful
-            )
-        }
-    }
-
-    /** Looks up live info on the web with Tavily and shows a short reply. */
-    private fun sendToWeb(request: LiveInfo.Request) {
-        requestInProgress = true
-
-        status.text = "SEARCHING THE WEB…"
-        showTyping()
-
-        tavilyClient.search(request) { webResult ->
-            if (isFinishing || isDestroyed) {
-                return@search
-            }
-
-            requestInProgress = false
-            hideTyping()
-
-            showReply(
-                webResult.message,
-                webResult.successful
-            )
-        }
-    }
-
-    private fun showReply(
-        message: String,
-        speak: Boolean
-    ) {
-        addMessage(message, false)
-
-        status.text = if (speak) {
-            "DONE"
-        } else {
-            "NEEDS ATTENTION"
-        }
-
-        if (speak) {
-            speechOutput.speak(message)
-        }
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            grantResults
-        )
-
-        when (requestCode) {
-            MICROPHONE_PERMISSION_REQUEST -> {
-                if (
-                    grantResults.isNotEmpty() &&
-                    grantResults[0] == PackageManager.PERMISSION_GRANTED
-                ) {
-                    startVoiceInput()
-                } else {
-                    addMessage(
-                        "Microphone permission was denied. " +
-                            "You can still type messages.",
-                        false
-                    )
-                    status.text = "YOUR PERSONAL ASSISTANT"
-                }
-            }
-
-            WAKE_MIC_REQUEST -> {
-                if (
-                    grantResults.isNotEmpty() &&
-                    grantResults[0] == PackageManager.PERMISSION_GRANTED
-                ) {
-                    continueWakeSetup()
-                } else {
-                    showReply(
-                        "The wake word needs the microphone. It stays off.",
-                        false
-                    )
-                }
-            }
-
-            WAKE_NOTIF_REQUEST -> {
-                // Notifications are optional; carry on either way.
-                continueWakeSetup()
-            }
-
-            NOTIFICATION_PERMISSION_REQUEST -> {
-                // The capture works even if notifications are denied.
-                if (pendingScreenAction != null) {
-                    launchScreenCaptureConsent()
-                }
-            }
-
-            CAMERA_PERMISSION_REQUEST -> {
-                val command = pendingCommand
-                pendingCommand = null
-
-                if (
-                    grantResults.isNotEmpty() &&
-                    grantResults[0] == PackageManager.PERMISSION_GRANTED &&
-                    command != null
-                ) {
-                    handleCommand(command)
-                } else {
-                    showReply(
-                        "Camera permission was denied. " +
-                            "Allow it in Settings if the requested command needs it.",
-                        false
-                    )
-                }
-            }
-        }
-    }
-
-    // ----------------------------------------------------------
-    // Wake word ("Hey VIX", "Hi VIX", "Hello VIX")
-    // ----------------------------------------------------------
-
-    override fun onStart() {
-        super.onStart()
-        WakeWordService.setUiVisible(true)
-    }
-
-    override fun onStop() {
-        WakeWordService.setUiVisible(false)
-        super.onStop()
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleWakeIntent(intent)
-    }
-
-    private fun handleWakeIntent(intent: Intent?) {
-        if (
-            intent == null ||
-            !intent.getBooleanExtra(WakeWordService.EXTRA_WAKE, false)
-        ) {
-            return
-        }
-
-        val command = intent
-            .getStringExtra(WakeWordService.EXTRA_WAKE_COMMAND)
-            ?.trim()
-            .orEmpty()
-
-        intent.removeExtra(WakeWordService.EXTRA_WAKE)
-        intent.removeExtra(WakeWordService.EXTRA_WAKE_COMMAND)
-
-        if (command.isNotEmpty()) {
-            addMessage(command, true)
-            handleCommand(command)
-        } else {
-            status.text = "LISTENING… SPEAK NOW"
-            // Short pause so the microphone is free again.
-            conversationScroll.postDelayed({ startVoiceInput() }, 400)
-        }
-    }
-
-    private fun updateWakeButton() {
-        if (!::wakeButton.isInitialized) return
-
-        val on = WakeWordService.isEnabled(this)
-
-        wakeButton.text = if (on) {
-            "● WAKE WORD ON · say Hey VIX (tap to turn off)"
-        } else {
-            "○ WAKE WORD OFF · tap to turn on"
-        }
-
-        wakeButton.setTextColor(
-            if (on) Color.rgb(68, 220, 130) else mutedColor
-        )
-    }
-
-    private fun toggleWake() {
-        if (WakeWordService.isEnabled(this)) {
-            WakeWordService.setEnabled(this, false)
-            startService(
-                Intent(this, WakeWordService::class.java)
-                    .setAction(WakeWordService.ACTION_STOP)
-            )
-            updateWakeButton()
-            showReply("Wake word is off.", false)
-            return
-        }
-
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            showReply(
-                "This phone has no speech recognition service, " +
-                    "so the wake word can't work.",
-                false
-            )
-            return
-        }
-
-        wakeNotifAsked = false
-        continueWakeSetup()
-    }
-
-    /** Asks for each needed permission in turn, then turns the wake word on. */
-    private fun continueWakeSetup() {
-        if (
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                WAKE_MIC_REQUEST
-            )
-            return
-        }
-
-        if (
-            Build.VERSION.SDK_INT >= 33 &&
-            !wakeNotifAsked &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            wakeNotifAsked = true
-            requestPermissions(
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                WAKE_NOTIF_REQUEST
-            )
-            return
-        }
-
-        if (!Settings.canDrawOverlays(this)) {
-            addMessage(
-                "One last step: on the next screen, turn on " +
-                    "\"Allow display over other apps\" for VIX. " +
-                    "Android needs this so VIX can open when you say Hey VIX.",
-                false
-            )
-            startActivityForResult(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                ),
-                WAKE_OVERLAY_REQUEST
-            )
-            return
-        }
-
-        WakeWordService.setEnabled(this, true)
-        startForegroundService(Intent(this, WakeWordService::class.java))
-        updateWakeButton()
-
-        showReply(
-            "Wake word is on. Close VIX, then say \"Hey VIX\", " +
-                "\"Hello VIX\" or \"Hi VIX\". You can add your request, " +
-                "like \"Hey VIX open camera\".",
-            false
-        )
-        status.text = "DONE"
-    }
-
-    /** Restarts the listener after VIX is reopened, if it was turned on. */
-    private fun restoreWakeService() {
-        if (
-            WakeWordService.isEnabled(this) &&
-            checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED &&
-            Settings.canDrawOverlays(this)
-        ) {
-            startForegroundService(Intent(this, WakeWordService::class.java))
-        }
-    }
-
-    // ----------------------------------------------------------
-    // Power button / default assistant
-    // ----------------------------------------------------------
-
-    private fun isVixAssistant(): Boolean {
-        return try {
-            val value = Settings.Secure.getString(contentResolver, "assistant")
-                ?: ""
-            value.startsWith("$packageName/")
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun updateAssistButton() {
-        if (!::assistButton.isInitialized) return
-
-        val on = isVixAssistant()
-
-        assistButton.text = if (on) {
-            "● POWER BUTTON ASSISTANT: VIX is set"
-        } else {
-            "○ POWER BUTTON: tap to set VIX as assistant"
-        }
-
-        assistButton.setTextColor(
-            if (on) Color.rgb(68, 220, 130) else mutedColor
-        )
-    }
-
-    private fun onAssistClicked() {
-        if (isVixAssistant()) {
-            showReply(
-                "VIX is your phone's assistant. Hold the power button " +
-                    "to open it. If that opens something else, look in " +
-                    "Settings for \"Press and hold power button\" (or " +
-                    "\"Power key\") and choose the digital assistant.",
-                false
-            )
-            return
-        }
-
-        addMessage(
-            "On the next screen, open \"Digital assistant app\" and " +
-                "choose VIX. Then find the setting for pressing and " +
-                "holding the power button and set it to the digital " +
-                "assistant.",
-            false
-        )
-
-        try {
-            startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
-        } catch (_: Exception) {
-            try {
-                startActivity(Intent(Settings.ACTION_SETTINGS))
-            } catch (_: Exception) {
-                showReply(
-                    "I couldn't open Settings. Open Settings, Apps, " +
-                        "Default apps, Digital assistant app, and choose VIX.",
-                    false
-                )
-            }
-        }
-    }
-
-    // ----------------------------------------------------------
-    // Screenshot and screen recording
-    // ----------------------------------------------------------
-
-    private fun handleScreenAction(action: ScreenCaptureController.Action) {
-        if (action == ScreenCaptureController.Action.STOP_RECORDING) {
-            if (ScreenCaptureService.isRecording) {
-                startService(
-                    Intent(this, ScreenCaptureService::class.java)
-                        .setAction(ScreenCaptureService.ACTION_STOP_RECORDING)
-                )
-                showReply("Stopping the screen recording…", true)
-            } else {
-                showReply("No screen recording is running right now.", false)
-            }
-            return
-        }
-
-        if (
-            action == ScreenCaptureController.Action.START_RECORDING &&
-            ScreenCaptureService.isRecording
-        ) {
-            showReply(
-                "A screen recording is already running. " +
-                    "Say \"stop screen recording\" to finish it.",
-                false
-            )
-            return
-        }
-
-        pendingScreenAction = action
-
-        if (
-            Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                NOTIFICATION_PERMISSION_REQUEST
-            )
-            return
-        }
-
-        launchScreenCaptureConsent()
-    }
-
-    private fun launchScreenCaptureConsent() {
-        val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE)
-            as MediaProjectionManager
-
-        status.text = "WAITING FOR PERMISSION…"
-
-        startActivityForResult(
-            manager.createScreenCaptureIntent(),
-            SCREEN_CAPTURE_REQUEST
-        )
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(
-        requestCode: Int,
-        resultCode: Int,
-        data: Intent?
-    ) {
-        super.onActivityResult(requestCode, resultCode, data)
-
-        if (requestCode == WAKE_OVERLAY_REQUEST) {
-            if (Settings.canDrawOverlays(this)) {
-                continueWakeSetup()
-            } else {
-                showReply(
-                    "Without \"Display over other apps\", I can't open " +
-                        "myself when you say Hey VIX. Wake word stays off.",
-                    false
-                )
-            }
-            return
-        }
-
-        if (requestCode != SCREEN_CAPTURE_REQUEST) {
-            return
-        }
-
-        val action = pendingScreenAction
-        pendingScreenAction = null
-
-        if (action == null) {
-            return
-        }
-
-        if (resultCode != RESULT_OK || data == null) {
-            showReply(
-                "Screen capture was not allowed, so I didn't capture anything.",
-                false
-            )
-            return
-        }
-
-        val screenshot = action == ScreenCaptureController.Action.SCREENSHOT
-
-        val serviceIntent = Intent(this, ScreenCaptureService::class.java)
-            .setAction(
-                if (screenshot) {
-                    ScreenCaptureService.ACTION_SCREENSHOT
-                } else {
-                    ScreenCaptureService.ACTION_START_RECORDING
-                }
-            )
-            .putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
-            .putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
-
-        startForegroundService(serviceIntent)
-
-        showReply(
-            if (screenshot) {
-                "Taking the screenshot. I'll step aside for a moment so it " +
-                    "captures your real screen."
-            } else {
-                "Screen recording started. Say \"stop screen recording\" " +
-                    "or tap Stop in the notification."
-            },
-            false
-        )
-        status.text = "DONE"
-
-        // Move VIX to the background so it is not in the picture.
-        conversationScroll.postDelayed({ moveTaskToBack(true) }, 700)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        updateWakeButton()
-        updateAssistButton()
-        // The overlay may have changed the mode while VIX was in the background.
-        updateModeSwitches()
-        updateVoiceButtons()
-
-        // Tell the user what the capture service did while VIX was hidden.
-        val report = ScreenCaptureService.takePendingReport()
-        if (report != null) {
-            addMessage(report, false)
-            status.text = "DONE"
-        }
-    }
-
-    override fun onDestroy() {
-        hideTyping()
-
-        if (::voiceController.isInitialized) {
-            voiceController.destroy()
-        }
-
-        if (::speechOutput.isInitialized) {
-            speechOutput.shutdown()
-        }
-
-        if (::aiApiClient.isInitialized) {
-            aiApiClient.close()
-        }
-
-        if (::tavilyClient.isInitialized) {
-            tavilyClient.close()
-        }
-
-        super.onDestroy()
-    }
-
-    private fun dp(value: Int): Int {
-        return (
-            value * resources.displayMetrics.density
-        ).toInt()
-    }
-
-    private fun roundedBackground(
-        color: Int,
-        radiusDp: Int
-    ): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radiusDp).toFloat()
-        }
-    }
-}
+   
