@@ -1,0 +1,19 @@
+name: Show VIX fingerprint
+
+on:
+  workflow_dispatch:
+
+jobs:
+  show:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print fingerprint
+        env:
+          KS: ${{ secrets.VIX_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.VIX_KEYSTORE_PASSWORD }}
+        run: |
+          echo "$KS" | base64 -d > vix.keystore
+          echo "SHA-1 for Google:"
+          keytool -exportcert -alias vix -keystore vix.keystore -storepass "$PW" | sha1sum | cut -d' ' -f1 | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//'
+          echo "SHA-256:"
+          keytool -exportcert -alias vix -keystore vix.keystore -storepass "$PW" | sha256sum | cut -d' ' -f1 | tr 'a-f' 'A-F' | sed 's/../&:/g; s/:$//'
