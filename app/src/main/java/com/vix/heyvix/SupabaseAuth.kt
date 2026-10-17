@@ -4,17 +4,22 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
+import android.util.Base64
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.URLEncoder
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.Executors
 
 /**
  * Login with Supabase Auth over its REST API (no SDK).
  * The session is kept in a private preferences file on this phone.
+ * Google sign-in uses the browser and comes back through vix://auth.
  */
 object SupabaseAuth {
 
@@ -26,12 +31,20 @@ object SupabaseAuth {
 
     private class HttpResult(val status: Int, val body: JSONObject)
 
+    /** The link Supabase sends the browser back to after Google sign-in. */
+    const val OAUTH_REDIRECT = "vix://auth"
+
     private const val PREFS = "vix_account"
     private const val K_ACCESS = "access_token"
     private const val K_REFRESH = "refresh_token"
     private const val K_EXPIRES = "expires_at"
     private const val K_USER_ID = "user_id"
     private const val K_EMAIL = "email"
+
+    // The PKCE secret for one Google sign-in lives in its own file,
+    // so logging out never touches it by accident.
+    private const val OAUTH_PREFS = "vix_oauth"
+    private const val K_VERIFIER = "code_verifier"
 
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -158,6 +171,80 @@ object SupabaseAuth {
             }
             main.post { done() }
         }
+    }
+
+    // ---------- Google sign-in (browser + PKCE) ----------
+
+    /**
+     * The address to open in the browser to start Google sign-in.
+     * Also saves the secret this sign-in needs to finish later.
+     */
+    fun googleSignInUrl(context: Context): String {
+        val verifier = newVerifier()
+        context.applicationContext
+            .getSharedPreferences(OAUTH_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(K_VERIFIER, verifier)
+            .apply()
+
+        val challenge = challengeFor(verifier)
+        val redirect = URLEncoder.encode(OAUTH_REDIRECT, "UTF-8")
+
+        return SupabaseConfig.URL +
+            "/auth/v1/authorize?provider=google" +
+            "&redirect_to=" + redirect +
+            "&code_challenge=" + challenge +
+            "&code_challenge_method=s256"
+    }
+
+    /** Finishes Google sign-in with the code that came back in vix://auth?code=... */
+    fun finishOAuth(context: Context, code: String, callback: (Result) -> Unit) {
+        val app = context.applicationContext
+        val oauth = app.getSharedPreferences(OAUTH_PREFS, Context.MODE_PRIVATE)
+        val verifier = oauth.getString(K_VERIFIER, null)
+        oauth.edit().remove(K_VERIFIER).apply()
+
+        runAsync(callback) {
+            if (verifier.isNullOrBlank()) {
+                return@runAsync Result(
+                    false,
+                    "That Google sign-in expired. Please try again."
+                )
+            }
+
+            val r = request(
+                "POST",
+                "/auth/v1/token?grant_type=pkce",
+                JSONObject().put("auth_code", code).put("code_verifier", verifier),
+                null
+            )
+            if (r.status !in 200..299) {
+                return@runAsync Result(false, errorText(r))
+            }
+            if (saveSession(app, r.body)) {
+                Result(true, "Logged in with Google.")
+            } else {
+                Result(false, "Google sign-in failed. Please try again.")
+            }
+        }
+    }
+
+    private fun newVerifier(): String {
+        val bytes = ByteArray(48)
+        SecureRandom().nextBytes(bytes)
+        return Base64.encodeToString(
+            bytes,
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+        )
+    }
+
+    private fun challengeFor(verifier: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(verifier.toByteArray(StandardCharsets.US_ASCII))
+        return Base64.encodeToString(
+            digest,
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+        )
     }
 
     // ---------- helpers ----------

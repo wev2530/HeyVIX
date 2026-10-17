@@ -44,16 +44,36 @@
 
         </activity>
 
-        <!-- Welcome, log in, sign up and forgot password pages. -->
+        <!-- Welcome, log in, sign up and forgot password pages.
+             Also catches vix://auth, the link that brings the user back
+             from Google sign-in in the browser. -->
         <activity
             android:name=".AuthActivity"
-            android:exported="false"
-            android:windowSoftInputMode="adjustResize" />
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="vix"
+                    android:host="auth" />
+            </intent-filter>
+
+        </activity>
+
+        <!-- Profile page: all the settings. -->
+        <activity
+            android:name=".ProfileActivity"
+            android:exported="false" />
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize">
 
             <!-- Many phones only list apps that can handle ASSIST in the
                  "Digital assistant app" picker. -->

@@ -6,9 +6,13 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.util.Patterns
 import android.view.Gravity
 import android.view.View
@@ -22,10 +26,12 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 
 /**
  * Welcome, Log in, Sign up and Forgot password pages (one activity,
  * the pages switch inside it). Dark VIX look with the red accent.
+ * Also catches the vix://auth link that brings the user back from Google.
  */
 class AuthActivity : Activity() {
 
@@ -78,6 +84,15 @@ class AuthActivity : Activity() {
 
         setContentView(root)
         render(Screen.WELCOME)
+
+        // Opened by the link that brings the user back from Google.
+        handleOAuthIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleOAuthIntent(intent)
     }
 
     @Deprecated("Deprecated in Java")
@@ -90,17 +105,76 @@ class AuthActivity : Activity() {
     }
 
     // ----------------------------------------------------------
+    // Google sign-in
+    // ----------------------------------------------------------
+
+    private fun startGoogleSignIn() {
+        if (busy) return
+
+        val url = SupabaseAuth.googleSignInUrl(this)
+
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Exception) {
+            Toast.makeText(
+                this,
+                "I couldn't open the browser for Google sign-in.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    /** Handles vix://auth?code=... (or an error) when the browser sends the user back. */
+    private fun handleOAuthIntent(source: Intent?) {
+        val data = source?.data ?: return
+        if (data.scheme != "vix" || data.host != "auth") return
+
+        // Use the link only once, even if the screen is rebuilt.
+        source.data = null
+
+        val code = data.getQueryParameter("code")
+
+        if (code.isNullOrBlank()) {
+            val reason = data.getQueryParameter("error_description")
+                ?: data.getQueryParameter("error")
+                ?: "Google sign-in was cancelled."
+            render(Screen.LOGIN, reason, true)
+            return
+        }
+
+        showSigningIn()
+
+        SupabaseAuth.finishOAuth(this, code) { result ->
+            if (isFinishing || isDestroyed) return@finishOAuth
+
+            if (result.successful) {
+                goToMain()
+            } else {
+                render(Screen.LOGIN, result.message, true)
+            }
+        }
+    }
+
+    private fun showSigningIn() {
+        screen = Screen.LOGIN
+        busy = true
+        content.removeAllViews()
+        addLogo(90)
+        addTitle("Signing you in…", "Finishing your Google sign-in")
+    }
+
+    // ----------------------------------------------------------
     // Pages
     // ----------------------------------------------------------
 
-    private fun render(target: Screen, info: String? = null) {
+    private fun render(target: Screen, info: String? = null, infoIsError: Boolean = false) {
         screen = target
         busy = false
         content.removeAllViews()
 
         when (target) {
             Screen.WELCOME -> renderWelcome()
-            Screen.LOGIN -> renderLogin(info)
+            Screen.LOGIN -> renderLogin(info, infoIsError)
             Screen.SIGNUP -> renderSignup()
             Screen.FORGOT -> renderForgot()
         }
@@ -122,13 +196,16 @@ class AuthActivity : Activity() {
 
         addButton("Log in", true) { render(Screen.LOGIN) }
         addButton("Sign up", false) { render(Screen.SIGNUP) }
+
+        addDivider()
+        addGoogleButton()
     }
 
-    private fun renderLogin(info: String?) {
+    private fun renderLogin(info: String?, infoIsError: Boolean) {
         addLogo(90)
         addTitle("Welcome back", "Log in to your VIX account")
 
-        val message = addMessage(info, greenColor)
+        val message = addMessage(info, if (infoIsError) redColor else greenColor)
         val email = addField(
             "Email address",
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
@@ -157,6 +234,9 @@ class AuthActivity : Activity() {
             }
         }
 
+        addDivider()
+        addGoogleButton()
+
         addLink("New to VIX? Sign up", false) {
             lastEmail = email.text.toString().trim()
             render(Screen.SIGNUP)
@@ -174,8 +254,8 @@ class AuthActivity : Activity() {
             View.AUTOFILL_HINT_EMAIL_ADDRESS,
             lastEmail
         )
-        val password = addPasswordField("Password (at least 6 characters)", "newPassword")
-        val confirm = addPasswordField("Confirm password", "newPassword")
+        val password = addPasswordField("Password (at least 6 characters)", View.AUTOFILL_HINT_NEW_PASSWORD)
+        val confirm = addPasswordField("Confirm password", View.AUTOFILL_HINT_NEW_PASSWORD)
 
         val button = addButton("Sign up", true)
         button.setOnClickListener {
@@ -191,6 +271,9 @@ class AuthActivity : Activity() {
                 false
             }
         }
+
+        addDivider()
+        addGoogleButton()
 
         addLink("Already have an account? Log in", false) {
             lastEmail = email.text.toString().trim()
@@ -505,6 +588,48 @@ class AuthActivity : Activity() {
             }
         )
         return button
+    }
+
+    /** White "Continue with Google" button. */
+    private fun addGoogleButton() {
+        val label = SpannableString("G     Continue with Google")
+        label.setSpan(
+            ForegroundColorSpan(Color.rgb(66, 133, 244)),
+            0,
+            1,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+
+        val button = Button(this).apply {
+            textSize = 16f
+            isAllCaps = false
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(30, 30, 34))
+            background = rounded(Color.WHITE, 26)
+            text = label
+            contentDescription = "Continue with Google"
+            setOnClickListener { startGoogleSignIn() }
+        }
+
+        content.addView(
+            button,
+            LinearLayout.LayoutParams(matchParent, dp(52)).apply {
+                topMargin = dp(6)
+            }
+        )
+    }
+
+    private fun addDivider() {
+        content.addView(
+            TextView(this).apply {
+                text = "or"
+                textSize = 13f
+                setTextColor(mutedColor)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(10), 0, dp(4))
+            },
+            LinearLayout.LayoutParams(matchParent, wrapContent)
+        )
     }
 
     private fun addLink(label: String, alignEnd: Boolean, onClick: () -> Unit) {
