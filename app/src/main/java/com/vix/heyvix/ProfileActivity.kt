@@ -603,4 +603,68 @@ class ProfileActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(16), dp(14), dp(16), dp(14))
-            ba
+            background = rounded(panelColor, 18)
+            addView(texts, LinearLayout.LayoutParams(0, wrapContent, 1f))
+            if (trailing != null) addView(trailing)
+            if (onClick != null) setOnClickListener { onClick() }
+        }
+
+        content.addView(
+            row,
+            LinearLayout.LayoutParams(matchParent, wrapContent).apply {
+                bottomMargin = dp(6)
+            }
+        )
+
+        return Row(row, subtitleView)
+    }
+
+    private fun styleSwitch(s: Switch) {
+        val states = arrayOf(
+            intArrayOf(android.R.attr.state_checked),
+            intArrayOf()
+        )
+        s.thumbTintList = ColorStateList(states, intArrayOf(Color.WHITE, mutedColor))
+        s.trackTintList = ColorStateList(
+            states,
+            intArrayOf(redColor, Color.rgb(70, 70, 82))
+        )
+    }
+
+    // ----------------------------------------------------------
+    // Helpers
+    // ----------------------------------------------------------
+
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun insetsOf(i: WindowInsets): IntArray =
+        if (Build.VERSION.SDK_INT >= 30) {
+            val b = i.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime())
+            intArrayOf(b.left, b.top, b.right, b.bottom)
+        } else {
+            intArrayOf(
+                i.systemWindowInsetLeft,
+                i.systemWindowInsetTop,
+                i.systemWindowInsetRight,
+                i.systemWindowInsetBottom
+            )
+        }
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, radiusDp: Int): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radiusDp).toFloat()
+        }
+
+    private fun circle(color: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(color)
+        }
+}
