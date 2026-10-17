@@ -1,13 +1,14 @@
-
 name: Build Hey VIX APK
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -36,8 +37,20 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug
 
+      - name: Name the APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk VIX.apk
+
       - name: Save APK
         uses: actions/upload-artifact@v4
         with:
           name: Hey-VIX-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: VIX.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: VIX 1.0.${{ github.run_number }}
+          files: VIX.apk
+          make_latest: true
+          generate_release_notes: true
