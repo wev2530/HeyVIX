@@ -45,6 +45,10 @@ class AuthActivity : Activity() {
     private val mutedColor = Color.rgb(165, 165, 175)
     private val greenColor = Color.rgb(68, 220, 130)
 
+    // Android's View class has no AUTOFILL_HINT_NEW_PASSWORD constant,
+    // so use the standard hint string directly.
+    private val hintNewPassword = "newPassword"
+
     private val matchParent = LinearLayout.LayoutParams.MATCH_PARENT
     private val wrapContent = LinearLayout.LayoutParams.WRAP_CONTENT
 
@@ -259,8 +263,8 @@ class AuthActivity : Activity() {
             View.AUTOFILL_HINT_EMAIL_ADDRESS,
             lastEmail
         )
-        val password = addPasswordField("Password (at least 6 characters)", View.AUTOFILL_HINT_NEW_PASSWORD)
-        val confirm = addPasswordField("Confirm password", View.AUTOFILL_HINT_NEW_PASSWORD)
+        val password = addPasswordField("Password (at least 6 characters)", hintNewPassword)
+        val confirm = addPasswordField("Confirm password", hintNewPassword)
 
         val button = addButton("Sign up", true)
         button.setOnClickListener {
@@ -314,8 +318,8 @@ class AuthActivity : Activity() {
         addTitle("Choose a new password", "Pick a password you'll remember")
 
         val message = addMessage(null, redColor)
-        val password = addPasswordField("New password (at least 6 characters)", View.AUTOFILL_HINT_NEW_PASSWORD)
-        val confirm = addPasswordField("Confirm new password", View.AUTOFILL_HINT_NEW_PASSWORD)
+        val password = addPasswordField("New password (at least 6 characters)", hintNewPassword)
+        val confirm = addPasswordField("Confirm new password", hintNewPassword)
 
         val button = addButton("Save password", true)
         button.setOnClickListener {
