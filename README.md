@@ -6,7 +6,7 @@
 
 ## Download
 
-**[Download the latest VIX APK](https://github.com/wev2530/HeyVIX/actions/runs/39018797441/artifacts/12096320194)**
+**[Download the latest VIX APK](https://github.com/wev2530/HeyVIX/releases/tag/v1.0.56)**
 
 The file comes as a `.zip`. Open it and install the `.apk` inside.
 
