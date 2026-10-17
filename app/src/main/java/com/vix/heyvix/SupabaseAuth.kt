@@ -19,19 +19,22 @@ import java.util.concurrent.Executors
 /**
  * Login with Supabase Auth over its REST API (no SDK).
  * The session is kept in a private preferences file on this phone.
- * Google sign-in uses the browser and comes back through vix://auth.
+ * Google sign-in and the password reset link both use the browser and
+ * come back through vix://auth.
  */
 object SupabaseAuth {
 
     data class Result(
         val successful: Boolean,
         val message: String,
-        val needsConfirmation: Boolean = false
+        val needsConfirmation: Boolean = false,
+        /** True when the user came back from a password reset email. */
+        val passwordReset: Boolean = false
     )
 
     private class HttpResult(val status: Int, val body: JSONObject)
 
-    /** The link Supabase sends the browser back to after Google sign-in. */
+    /** The link Supabase sends the browser back to (Google sign-in, password reset). */
     const val OAUTH_REDIRECT = "vix://auth"
 
     private const val PREFS = "vix_account"
@@ -41,10 +44,11 @@ object SupabaseAuth {
     private const val K_USER_ID = "user_id"
     private const val K_EMAIL = "email"
 
-    // The PKCE secret for one Google sign-in lives in its own file,
+    // The PKCE secret for one browser sign-in lives in its own file,
     // so logging out never touches it by accident.
     private const val OAUTH_PREFS = "vix_oauth"
     private const val K_VERIFIER = "code_verifier"
+    private const val K_RESET = "reset_pending"
 
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -141,16 +145,63 @@ object SupabaseAuth {
         }
     }
 
-    fun sendReset(email: String, callback: (Result) -> Unit) {
+    /**
+     * Sends the password reset email. The link in it opens VIX (vix://auth),
+     * which then shows the "choose a new password" screen.
+     */
+    fun sendReset(context: Context, email: String, callback: (Result) -> Unit) {
+        val app = context.applicationContext
+        val verifier = newVerifier()
+
+        app.getSharedPreferences(OAUTH_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(K_VERIFIER, verifier)
+            .putBoolean(K_RESET, true)
+            .apply()
+
+        val challenge = challengeFor(verifier)
+        val redirect = URLEncoder.encode(OAUTH_REDIRECT, "UTF-8")
+
         runAsync(callback) {
             val r = request(
                 "POST",
-                "/auth/v1/recover",
-                JSONObject().put("email", email.trim()),
+                "/auth/v1/recover?redirect_to=$redirect",
+                JSONObject()
+                    .put("email", email.trim())
+                    .put("code_challenge", challenge)
+                    .put("code_challenge_method", "s256"),
                 null
             )
             if (r.status in 200..299) {
-                Result(true, "If that email has an account, a reset link is on its way.")
+                Result(
+                    true,
+                    "If that email has an account, a reset link is on its way. " +
+                        "Open it on this phone."
+                )
+            } else {
+                Result(false, errorText(r))
+            }
+        }
+    }
+
+    /** Saves a new password for the signed-in user (used after a reset link). */
+    fun updatePassword(context: Context, password: String, callback: (Result) -> Unit) {
+        val app = context.applicationContext
+        runAsync(callback) {
+            val token = accessToken(app)
+                ?: return@runAsync Result(
+                    false,
+                    "Your reset link expired. Please request a new one."
+                )
+
+            val r = request(
+                "PUT",
+                "/auth/v1/user",
+                JSONObject().put("password", password),
+                token
+            )
+            if (r.status in 200..299) {
+                Result(true, "Password updated.")
             } else {
                 Result(false, errorText(r))
             }
@@ -185,6 +236,7 @@ object SupabaseAuth {
             .getSharedPreferences(OAUTH_PREFS, Context.MODE_PRIVATE)
             .edit()
             .putString(K_VERIFIER, verifier)
+            .putBoolean(K_RESET, false)
             .apply()
 
         val challenge = challengeFor(verifier)
@@ -197,18 +249,22 @@ object SupabaseAuth {
             "&code_challenge_method=s256"
     }
 
-    /** Finishes Google sign-in with the code that came back in vix://auth?code=... */
+    /**
+     * Finishes a browser sign-in with the code that came back in
+     * vix://auth?code=... (Google sign-in or a password reset link).
+     */
     fun finishOAuth(context: Context, code: String, callback: (Result) -> Unit) {
         val app = context.applicationContext
         val oauth = app.getSharedPreferences(OAUTH_PREFS, Context.MODE_PRIVATE)
         val verifier = oauth.getString(K_VERIFIER, null)
-        oauth.edit().remove(K_VERIFIER).apply()
+        val isReset = oauth.getBoolean(K_RESET, false)
+        oauth.edit().remove(K_VERIFIER).remove(K_RESET).apply()
 
         runAsync(callback) {
             if (verifier.isNullOrBlank()) {
                 return@runAsync Result(
                     false,
-                    "That Google sign-in expired. Please try again."
+                    "That link expired or was opened on another phone. Please try again."
                 )
             }
 
@@ -222,9 +278,13 @@ object SupabaseAuth {
                 return@runAsync Result(false, errorText(r))
             }
             if (saveSession(app, r.body)) {
-                Result(true, "Logged in with Google.")
+                Result(
+                    true,
+                    if (isReset) "Choose a new password." else "Logged in with Google.",
+                    passwordReset = isReset
+                )
             } else {
-                Result(false, "Google sign-in failed. Please try again.")
+                Result(false, "Sign-in failed. Please try again.")
             }
         }
     }
@@ -342,6 +402,8 @@ object SupabaseAuth {
                 "An account with this email already exists. Try logging in."
             code == "weak_password" ->
                 "That password is too weak. Try a longer one."
+            code == "same_password" ->
+                "Choose a password you haven't used before."
             code == "signup_disabled" -> "Sign ups are turned off right now."
             code == "over_email_send_rate_limit" || r.status == 429 ->
                 "Too many tries. Wait a minute and try again."

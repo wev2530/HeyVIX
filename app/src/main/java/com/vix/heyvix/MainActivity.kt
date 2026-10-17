@@ -780,6 +780,11 @@ class MainActivity : Activity() {
             for (m in list) {
                 addMessage(m.content, m.role == "user", m.quote)
             }
+
+            // Let the AI continue from what was said before in this chat.
+            aiApiClient.loadHistory(
+                list.map { (if (it.role == "assistant") "model" else "user") to it.content }
+            )
         }
 
         renderHistory(searchBox.text.toString())

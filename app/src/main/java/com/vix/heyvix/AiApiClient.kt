@@ -118,6 +118,43 @@ class AiApiClient(context: Context) {
         }
     }
 
+    /**
+     * Loads the earlier messages of a saved chat, so the AI continues from
+     * them. Each pair is (role, text) with role "user" or "model".
+     * Only the most recent messages are kept.
+     */
+    fun loadHistory(messages: List<Pair<String, String>>) {
+        executor.execute {
+            history.clear()
+
+            for ((role, text) in messages) {
+                if (text.isBlank()) continue
+
+                val last = history.lastOrNull()
+                if (last != null && last.first == role) {
+                    // Two messages in a row from the same side: join them.
+                    history[history.size - 1] = role to (last.second + "\n" + text)
+                } else {
+                    history.add(role to text)
+                }
+            }
+
+            while (history.size > MAX_HISTORY_MESSAGES) {
+                history.removeAt(0)
+            }
+
+            // Gemini wants the conversation to start with the user...
+            while (history.isNotEmpty() && history[0].first != "user") {
+                history.removeAt(0)
+            }
+
+            // ...and the next message is the user's, so the old part ends with the AI.
+            if (history.isNotEmpty() && history[history.size - 1].first == "user") {
+                history.removeAt(history.size - 1)
+            }
+        }
+    }
+
     private fun askGemini(message: String, allowSearch: Boolean): Result {
         val key = apiKey()
         if (key.isBlank()) {

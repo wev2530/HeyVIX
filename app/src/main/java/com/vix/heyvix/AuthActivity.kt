@@ -29,13 +29,14 @@ import android.widget.TextView
 import android.widget.Toast
 
 /**
- * Welcome, Log in, Sign up and Forgot password pages (one activity,
- * the pages switch inside it). Dark VIX look with the red accent.
- * Also catches the vix://auth link that brings the user back from Google.
+ * Welcome, Log in, Sign up, Forgot password and New password pages
+ * (one activity, the pages switch inside it). Dark VIX look with the red accent.
+ * Also catches the vix://auth link that brings the user back from Google
+ * or from a password reset email.
  */
 class AuthActivity : Activity() {
 
-    private enum class Screen { WELCOME, LOGIN, SIGNUP, FORGOT }
+    private enum class Screen { WELCOME, LOGIN, SIGNUP, FORGOT, NEWPASSWORD }
 
     private val backgroundColor = Color.rgb(12, 12, 16)
     private val surfaceColor = Color.rgb(30, 30, 38)
@@ -85,7 +86,8 @@ class AuthActivity : Activity() {
         setContentView(root)
         render(Screen.WELCOME)
 
-        // Opened by the link that brings the user back from Google.
+        // Opened by the link that brings the user back from Google or from
+        // a password reset email.
         handleOAuthIntent(intent)
     }
 
@@ -100,12 +102,14 @@ class AuthActivity : Activity() {
         when (screen) {
             Screen.WELCOME -> super.onBackPressed()
             Screen.FORGOT -> render(Screen.LOGIN)
+            // The reset link already signed the user in: go to the app.
+            Screen.NEWPASSWORD -> goToMain()
             else -> render(Screen.WELCOME)
         }
     }
 
     // ----------------------------------------------------------
-    // Google sign-in
+    // Google sign-in and reset link
     // ----------------------------------------------------------
 
     private fun startGoogleSignIn() {
@@ -137,7 +141,7 @@ class AuthActivity : Activity() {
         if (code.isNullOrBlank()) {
             val reason = data.getQueryParameter("error_description")
                 ?: data.getQueryParameter("error")
-                ?: "Google sign-in was cancelled."
+                ?: "Sign-in was cancelled."
             render(Screen.LOGIN, reason, true)
             return
         }
@@ -147,10 +151,10 @@ class AuthActivity : Activity() {
         SupabaseAuth.finishOAuth(this, code) { result ->
             if (isFinishing || isDestroyed) return@finishOAuth
 
-            if (result.successful) {
-                goToMain()
-            } else {
-                render(Screen.LOGIN, result.message, true)
+            when {
+                !result.successful -> render(Screen.LOGIN, result.message, true)
+                result.passwordReset -> render(Screen.NEWPASSWORD)
+                else -> goToMain()
             }
         }
     }
@@ -160,7 +164,7 @@ class AuthActivity : Activity() {
         busy = true
         content.removeAllViews()
         addLogo(90)
-        addTitle("Signing you in…", "Finishing your Google sign-in")
+        addTitle("Signing you in…", "Just a moment")
     }
 
     // ----------------------------------------------------------
@@ -177,6 +181,7 @@ class AuthActivity : Activity() {
             Screen.LOGIN -> renderLogin(info, infoIsError)
             Screen.SIGNUP -> renderSignup()
             Screen.FORGOT -> renderForgot()
+            Screen.NEWPASSWORD -> renderNewPassword()
         }
     }
 
@@ -254,8 +259,8 @@ class AuthActivity : Activity() {
             View.AUTOFILL_HINT_EMAIL_ADDRESS,
             lastEmail
         )
-        val password = addPasswordField("Password (at least 6 characters)", "newPassword")
-        val confirm = addPasswordField("Confirm password", "newPassword")
+        val password = addPasswordField("Password (at least 6 characters)", View.AUTOFILL_HINT_NEW_PASSWORD)
+        val confirm = addPasswordField("Confirm password", View.AUTOFILL_HINT_NEW_PASSWORD)
 
         val button = addButton("Sign up", true)
         button.setOnClickListener {
@@ -302,6 +307,32 @@ class AuthActivity : Activity() {
             lastEmail = email.text.toString().trim()
             render(Screen.LOGIN)
         }
+    }
+
+    private fun renderNewPassword() {
+        addLogo(90)
+        addTitle("Choose a new password", "Pick a password you'll remember")
+
+        val message = addMessage(null, redColor)
+        val password = addPasswordField("New password (at least 6 characters)", View.AUTOFILL_HINT_NEW_PASSWORD)
+        val confirm = addPasswordField("Confirm new password", View.AUTOFILL_HINT_NEW_PASSWORD)
+
+        val button = addButton("Save password", true)
+        button.setOnClickListener {
+            if (!busy) doNewPassword(password, confirm, message, button)
+        }
+
+        confirm.imeOptions = EditorInfo.IME_ACTION_DONE
+        confirm.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                button.performClick()
+                true
+            } else {
+                false
+            }
+        }
+
+        addLink("Skip for now", false) { goToMain() }
     }
 
     // ----------------------------------------------------------
@@ -403,7 +434,7 @@ class AuthActivity : Activity() {
         setBusy(button, true, "Sending…")
         message.visibility = View.GONE
 
-        SupabaseAuth.sendReset(mail) { result ->
+        SupabaseAuth.sendReset(this, mail) { result ->
             if (isFinishing || isDestroyed) return@sendReset
 
             setBusy(button, false, "Send reset link")
@@ -412,6 +443,40 @@ class AuthActivity : Activity() {
                 message.setTextColor(greenColor)
                 message.visibility = View.VISIBLE
             } else {
+                showError(message, result.message)
+            }
+        }
+    }
+
+    private fun doNewPassword(
+        password: EditText,
+        confirm: EditText,
+        message: TextView,
+        button: Button
+    ) {
+        val pass = password.text.toString()
+
+        if (pass.length < 6) {
+            showError(message, "Use at least 6 characters for the password.")
+            return
+        }
+        if (pass != confirm.text.toString()) {
+            showError(message, "The two passwords don't match.")
+            return
+        }
+
+        hideKeyboard()
+        setBusy(button, true, "Saving…")
+        message.visibility = View.GONE
+
+        SupabaseAuth.updatePassword(this, pass) { result ->
+            if (isFinishing || isDestroyed) return@updatePassword
+
+            if (result.successful) {
+                Toast.makeText(this, "Password updated.", Toast.LENGTH_SHORT).show()
+                goToMain()
+            } else {
+                setBusy(button, false, "Save password")
                 showError(message, result.message)
             }
         }
