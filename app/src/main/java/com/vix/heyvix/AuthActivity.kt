@@ -254,8 +254,8 @@ class AuthActivity : Activity() {
             View.AUTOFILL_HINT_EMAIL_ADDRESS,
             lastEmail
         )
-        val password = addPasswordField("Password (at least 6 characters)", View.AUTOFILL_HINT_NEW_PASSWORD)
-        val confirm = addPasswordField("Confirm password", View.AUTOFILL_HINT_NEW_PASSWORD)
+        val password = addPasswordField("Password (at least 6 characters)", "newPassword")
+        val confirm = addPasswordField("Confirm password", "newPassword")
 
         val button = addButton("Sign up", true)
         button.setOnClickListener {
