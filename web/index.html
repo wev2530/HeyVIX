@@ -108,7 +108,7 @@
     <label class="row-card">
       <span class="row-text">
         <span class="row-title">Web search</span>
-        <span class="row-sub">Live info from Google</span>
+        <span class="row-sub">Live info from the web</span>
       </span>
       <input id="opt-search" type="checkbox" class="switch">
     </label>
@@ -121,6 +121,18 @@
       <div class="btn-row">
         <button id="key-save" class="btn small primary" type="button">Save key</button>
         <button id="key-remove" class="btn small" type="button">Remove</button>
+      </div>
+    </div>
+
+    <h3 class="section">Tavily search key</h3>
+    <div class="row-card col">
+      <span class="row-title">Your own Tavily key</span>
+      <span id="tavily-status" class="row-sub"></span>
+      <input id="tavily-input" type="password" placeholder="Paste your Tavily key here" autocomplete="off"
+             style="width:100%;padding:15px 16px;border:0;border-radius:14px;background:#1e1e26;color:#f5f5f8;outline:none;">
+      <div class="btn-row">
+        <button id="tavily-save" class="btn small primary" type="button">Save key</button>
+        <button id="tavily-remove" class="btn small" type="button">Remove</button>
       </div>
     </div>
 
