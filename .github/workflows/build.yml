@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths-ignore:
       - '**.md'
+      - 'web/**'
+      - 'netlify.toml'
+      - 'supabase/**'
   workflow_dispatch:
 
 permissions:
@@ -34,21 +37,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Restore VIX signing key
-        env:
-          KEYSTORE_B64: ${{ secrets.VIX_KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$GITHUB_WORKSPACE/vix.keystore"
-            echo "VIX_KEYSTORE_PATH=$GITHUB_WORKSPACE/vix.keystore" >> "$GITHUB_ENV"
-            echo "Signing key restored."
-          else
-            echo "WARNING: secret VIX_KEYSTORE_BASE64 is empty. This build will use a random debug key and will NOT update over an older install."
-          fi
-
       - name: Build debug APK
-        env:
-          VIX_KEYSTORE_PASSWORD: ${{ secrets.VIX_KEYSTORE_PASSWORD }}
         run: gradle assembleDebug
 
       - name: Name the APK

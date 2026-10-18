@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0C0C10">
+<meta name="description" content="VIX AI, your personal AI assistant.">
+<title>VIX AI</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Shown for a moment while the saved login is checked -->
+<div id="splash" class="screen center">
+  <img class="splash-logo" src="icon.svg" alt="VIX AI">
+</div>
+
+<!-- Log in, sign up, forgot password, new password -->
+<div id="auth" class="screen hidden">
+  <div class="auth-scroll">
+    <form id="auth-form" class="auth-box" novalidate>
+      <img class="auth-logo" src="icon.svg" alt="VIX AI">
+      <h1 id="auth-title">Welcome back</h1>
+      <p id="auth-sub" class="sub"></p>
+      <p id="auth-msg" class="msg hidden"></p>
+
+      <div id="email-wrap">
+        <input id="email" type="email" placeholder="Email address" autocomplete="email" inputmode="email">
+      </div>
+      <div id="pw-wrap" class="pw">
+        <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+        <button type="button" id="pw-toggle" class="pw-toggle">Show</button>
+      </div>
+      <div id="confirm-wrap" class="pw hidden">
+        <input id="confirm" type="password" placeholder="Confirm password" autocomplete="new-password">
+      </div>
+
+      <button type="button" id="link-forgot" class="link end hidden">Forgot password?</button>
+      <button type="submit" id="auth-primary" class="btn primary">Log in</button>
+
+      <div id="or-row" class="or">or</div>
+      <button type="button" id="google" class="btn google"><span class="g">G</span>Continue with Google</button>
+
+      <button type="button" id="link-switch" class="link">New to VIX? Sign up</button>
+    </form>
+  </div>
+</div>
+
+<!-- Chat -->
+<div id="main" class="screen hidden">
+  <header class="topbar">
+    <button id="menu-btn" class="circle" type="button" aria-label="Menu">☰</button>
+    <div class="brand"><img src="icon.svg" alt="" class="brand-logo"><span>VIX AI</span></div>
+    <button id="new-btn" class="circle" type="button" aria-label="New chat">✎</button>
+  </header>
+  <div id="status">YOUR AI ASSISTANT</div>
+
+  <main id="conversation" aria-live="polite"></main>
+
+  <div id="reply-bar" class="hidden">
+    <div class="reply-line"></div>
+    <div class="reply-texts">
+      <div class="reply-label">Replying to</div>
+      <div id="reply-preview"></div>
+    </div>
+    <button id="reply-cancel" type="button" aria-label="Cancel reply">✕</button>
+  </div>
+
+  <form id="composer">
+    <button id="plus-btn" class="circle small dark" type="button" aria-label="Quick actions">+</button>
+    <textarea id="input" rows="1" placeholder="Message VIX AI..." aria-label="Message"></textarea>
+    <button id="mic-btn" class="circle small dark" type="button" aria-label="Speak">🎙</button>
+    <button id="send-btn" class="circle small red" type="submit" aria-label="Send">➤</button>
+  </form>
+
+  <!-- Left menu -->
+  <div id="scrim" class="hidden"></div>
+  <aside id="drawer" aria-label="Chat history">
+    <div class="drawer-head">
+      <div class="brand"><img src="icon.svg" alt="" class="brand-logo"><span>VIX AI</span></div>
+      <button id="search-btn" class="circle" type="button" aria-label="Search chats">🔍</button>
+    </div>
+    <input id="search" class="hidden" type="search" placeholder="Search chats">
+    <button id="drawer-new" class="drawer-new" type="button">✎&nbsp;&nbsp; New chat</button>
+    <div class="drawer-label">Chats</div>
+    <div id="history"></div>
+    <button id="profile-row" class="profile-row" type="button">
+      <span id="avatar-small" class="avatar"></span>
+      <span class="profile-texts">
+        <span id="profile-email-small" class="profile-name"></span>
+        <span class="profile-sub">Profile and settings</span>
+      </span>
+    </button>
+  </aside>
+</div>
+
+<!-- Profile and settings -->
+<div id="profile" class="screen hidden">
+  <div class="profile-scroll">
+    <button id="profile-back" class="circle" type="button" aria-label="Back">←</button>
+    <div id="avatar-big" class="avatar big"></div>
+    <h2 id="profile-email" class="profile-email"></h2>
+
+    <h3 class="section">My VIX</h3>
+    <label class="row-card">
+      <span class="row-text">
+        <span class="row-title">Web search</span>
+        <span class="row-sub">Live info from Google</span>
+      </span>
+      <input id="opt-search" type="checkbox" class="switch">
+    </label>
+
+    <h3 class="section">Gemini key</h3>
+    <div class="row-card col">
+      <span class="row-title">Your own Gemini key</span>
+      <span id="key-status" class="row-sub"></span>
+      <input id="key-input" type="password" placeholder="Paste your key here" autocomplete="off">
+      <div class="btn-row">
+        <button id="key-save" class="btn small primary" type="button">Save key</button>
+        <button id="key-remove" class="btn small" type="button">Remove</button>
+      </div>
+    </div>
+
+    <h3 class="section">Account</h3>
+    <div class="row-card">
+      <span class="row-text">
+        <span class="row-title">Email</span>
+        <span id="account-email" class="row-sub"></span>
+      </span>
+    </div>
+    <button id="install-btn" class="row-card btn-card hidden" type="button">
+      <span class="row-text">
+        <span class="row-title">Install VIX AI</span>
+        <span class="row-sub">Add it to your home screen</span>
+      </span>
+    </button>
+    <button id="delete-history" class="row-card btn-card" type="button">
+      <span class="row-text">
+        <span class="row-title danger-text">Delete chat history</span>
+        <span class="row-sub">Removes all your saved chats</span>
+      </span>
+    </button>
+    <button id="logout" class="row-card btn-card" type="button">
+      <span class="row-title danger-text">Log out</span>
+    </button>
+    <p class="footnote">Made by GCV Designs</p>
+  </div>
+</div>
+
+<!-- Bottom sheet (menus) -->
+<div id="sheet" class="hidden">
+  <div class="sheet-card">
+    <div id="sheet-title" class="sheet-title hidden"></div>
+    <div id="sheet-items"></div>
+    <button id="sheet-cancel" class="sheet-item" type="button">Cancel</button>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
