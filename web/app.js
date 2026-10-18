@@ -591,7 +591,7 @@ function friendlyAiError(err) {
     case "daily_limit":
       return "You've used today's messages on the shared key. Paste your own Gemini key in Profile to keep chatting, or try again tomorrow.";
     case "no_default_key":
-      return "VIX AI has no shared key yet. Paste your own Gemini key in Profile (get a free one at aistudio.google.com).";
+      return "The free public quota has run out. Add your own API key in Profile to continue using the AI service.";
     case "not_signed_in":
       return "Please log in again.";
     case "gemini_busy":
