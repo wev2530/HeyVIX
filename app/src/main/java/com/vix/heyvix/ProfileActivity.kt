@@ -29,7 +29,7 @@ import android.widget.Toast
 /**
  * The profile page, opened from the profile icon in the left menu.
  * Holds every setting: VIX AI, web search, wake word, power button,
- * voice and speed, keys, account, chat history and log out.
+ * voice and speed, keys, account, app version, chat history and log out.
  */
 class ProfileActivity : Activity() {
 
@@ -235,6 +235,7 @@ class ProfileActivity : Activity() {
         addSection("Account")
 
         addRow("Email", email.ifBlank { "Not available" })
+        addRow("App version", appVersionName())
         addRow("Delete chat history", "Removes all your saved chats", redColor) {
             confirmDeleteHistory()
         }
@@ -553,6 +554,15 @@ class ProfileActivity : Activity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** The version of this build, like 1.0.60 (same number as the release tag). */
+    private fun appVersionName(): String {
+        return try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "Unknown"
+        } catch (_: Exception) {
+            "Unknown"
+        }
     }
 
     // ----------------------------------------------------------
