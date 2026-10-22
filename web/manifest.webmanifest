@@ -1,10 +1,12 @@
 {
+  "id": "/",
   "name": "VIX AI",
   "short_name": "VIX AI",
   "description": "Your personal AI assistant.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#0C0C10",
   "theme_color": "#0C0C10",
   "icons": [
@@ -12,5 +14,21 @@
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "screenshots": [
+    {
+      "src": "screenshots/desktop-1.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "VIX AI on desktop"
+    },
+    {
+      "src": "screenshots/mobile-1.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "VIX AI on mobile"
+    }
   ]
 }
