@@ -18,7 +18,7 @@ const LS_SEARCH = "vix_web_search";
 const DEFAULT_STATUS = "YOUR AI ASSISTANT";
 const MAX_HISTORY = 20;
 const SYSTEM_PROMPT =
-  "You are Vixie, an AI assistant for VIX AI. Answer in clear, conversational text " +
+  "You are VIX, Your personal AI Assistant . Answer in clear, conversational text " +
   "with no markdown headings, no asterisks and no bullet symbols. Put any code " +
   "inside triple backtick blocks. Keep answers short unless asked for detail.";
 
