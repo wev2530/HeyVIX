@@ -13,14 +13,80 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 const $ = (id) => document.getElementById(id);
 const SITE = location.origin + location.pathname;
 
-const LS_KEY = "vix_gemini_key";
+const LS_KEY = "vix_ai_key";
+const LS_PROVIDER = "vix_ai_provider";
+const LS_MODEL = "vix_ai_model";
+const LS_BASE = "vix_ai_base";
+const LS_OLD_GEMINI = "vix_gemini_key";
 const LS_SEARCH = "vix_web_search";
-const DEFAULT_STATUS = "YOUR AI ASSISTANT";
+const DEFAULT_STATUS = "VIX AI";
 const MAX_HISTORY = 20;
 const SYSTEM_PROMPT =
-  "You are VIX, Your personal AI Assistant . Answer in clear, conversational text " +
-  "with no markdown headings, no asterisks and no bullet symbols. Put any code " +
-  "inside triple backtick blocks. Keep answers short unless asked for detail.";
+  "Your name is Vix. You are part of Vix AI. When someone asks who you are, simply say " +
+  "I am Vix, or I am Vix, a part of Vix AI. Never call yourself Vixie, and never describe " +
+  "yourself as someone's Vix assistant or personal assistant. Speak in a calm, mature, " +
+  "professional tone. Answer in clear, conversational text with no markdown headings, " +
+  "no asterisks and no bullet symbols. Put any code inside triple backtick blocks. " +
+  "Keep answers short unless asked for detail.";
+
+// The AI providers a user can add a key for.
+// kind "openai" means the OpenAI-style chat API, which most providers copy.
+const PROVIDERS = {
+  gemini: {
+    label: "Google Gemini",
+    kind: "gemini",
+    model: GEMINI_MODEL,
+    hint: "Get a free key at aistudio.google.com",
+  },
+  openai: {
+    label: "OpenAI",
+    kind: "openai",
+    base: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+    hint: "Get a key at platform.openai.com/api-keys",
+  },
+  anthropic: {
+    label: "Anthropic (Claude)",
+    kind: "anthropic",
+    model: "claude-haiku-5-5",
+    hint: "Get a key at console.anthropic.com",
+  },
+  openrouter: {
+    label: "OpenRouter",
+    kind: "openai",
+    base: "https://openrouter.ai/api/v1",
+    model: "openrouter/auto",
+    hint: "Get a key at openrouter.ai/keys. One key reaches many models.",
+  },
+  groq: {
+    label: "Groq",
+    kind: "openai",
+    base: "https://api.groq.com/openai/v1",
+    model: "llama-3.3-70b-versatile",
+    hint: "Get a free key at console.groq.com/keys",
+  },
+  deepseek: {
+    label: "DeepSeek",
+    kind: "openai",
+    base: "https://api.deepseek.com/v1",
+    model: "deepseek-chat",
+    hint: "Get a key at platform.deepseek.com",
+  },
+  mistral: {
+    label: "Mistral",
+    kind: "openai",
+    base: "https://api.mistral.ai/v1",
+    model: "mistral-small-latest",
+    hint: "Get a key at console.mistral.ai",
+  },
+  custom: {
+    label: "Other (OpenAI-compatible)",
+    kind: "openai",
+    base: "",
+    model: "",
+    hint: "For any other provider that copies the OpenAI API. Enter its base URL and model name.",
+  },
+};
 
 // ------------------------------------------------------------
 // State
@@ -331,7 +397,7 @@ function startApp() {
   $("profile-email").textContent = email || "VIX account";
   $("account-email").textContent = email || "Not available";
   $("opt-search").checked = localStorage.getItem(LS_SEARCH) === "1";
-  updateKeyStatus();
+  loadKeyForm();
 
   chats = [];
   historyLoaded = false;
@@ -416,7 +482,7 @@ function showEmptyState() {
   $("conversation").innerHTML = "";
   emptyShown = false;
   addBubble(
-    "Hi, I'm VIX AI. Ask me a question, get help with writing or code, or search the web.",
+    "Hi, I am Vix. Ask me a question, get help with writing or code, or search the web.",
     "assistant"
   );
   emptyShown = true;
@@ -487,9 +553,10 @@ class AiError extends Error {
   }
 }
 
-// Turns the saved chat into what Gemini expects: starts with the user,
+// Turns the saved chat into what the AI expects: starts with the user,
 // alternates sides, ends with the AI, and keeps only the latest messages.
-function geminiHistory(list) {
+// Roles here are "user" and "model"; each provider function converts them.
+function chatHistory(list) {
   const out = [];
   for (const m of list) {
     if (!m.content || !m.content.trim()) continue;
@@ -507,10 +574,29 @@ function geminiHistory(list) {
 async function askAI(history, outgoing) {
   const messages = [...history, { role: "user", text: outgoing }];
   const search = localStorage.getItem(LS_SEARCH) === "1";
-  const ownKey = (localStorage.getItem(LS_KEY) || "").trim();
-  return ownKey
-    ? askGeminiDirect(ownKey, messages, search)
-    : askViaServer(messages, search);
+  const cfg = savedAi();
+
+  // No own key: the server holds the shared default key.
+  if (!cfg.key) return askViaServer(messages, search);
+
+  const kind = PROVIDERS[cfg.provider].kind;
+  if (kind === "gemini") return askGeminiDirect(cfg, messages, search);
+  if (kind === "anthropic") return askAnthropic(cfg, messages);
+  return askOpenAICompatible(cfg, messages);
+}
+
+function errorText(json, raw) {
+  const e = json && json.error;
+  if (typeof e === "string") return e;
+  if (e && typeof e.message === "string") return e.message;
+  return String(raw || "").slice(0, 200);
+}
+
+async function readJson(res) {
+  const raw = await res.text();
+  let json = {};
+  try { json = JSON.parse(raw); } catch (e) { /* keep empty */ }
+  return { ok: res.ok, status: res.status, json, raw };
 }
 
 function extractGeminiText(json) {
@@ -524,25 +610,23 @@ function extractGeminiText(json) {
   return text;
 }
 
-// The user's own key: the browser talks to Google directly.
-async function askGeminiDirect(key, messages, search) {
+// Google Gemini with the user's own key: the browser talks to Google directly.
+async function askGeminiDirect(cfg, messages, search) {
+  const model = cfg.model || GEMINI_MODEL;
   const contents = messages.map((m) => ({ role: m.role, parts: [{ text: m.text }] }));
 
   const call = async (withSearch) => {
     const body = { system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents };
     if (withSearch) body.tools = [{ google_search: {} }];
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        headers: { "Content-Type": "application/json", "x-goog-api-key": cfg.key },
         body: JSON.stringify(body),
       }
     );
-    const raw = await res.text();
-    let json = {};
-    try { json = JSON.parse(raw); } catch (e) { /* keep empty */ }
-    return { ok: res.ok, status: res.status, json, raw };
+    return readJson(res);
   };
 
   const wantSearch = search && !searchRefused;
@@ -554,11 +638,68 @@ async function askGeminiDirect(key, messages, search) {
     r = await call(false);
   }
 
-  if (!r.ok) {
-    const detail = (r.json && r.json.error && r.json.error.message) || "";
-    throw new AiError("gemini_error", r.status, detail);
-  }
+  if (!r.ok) throw new AiError("provider_error", r.status, errorText(r.json, r.raw));
   return extractGeminiText(r.json);
+}
+
+// OpenAI and every provider that copies its chat API.
+async function askOpenAICompatible(cfg, messages) {
+  const p = PROVIDERS[cfg.provider];
+  const base = (cfg.provider === "custom" ? cfg.base : p.base).replace(/\/+$/, "");
+  const model = cfg.model || p.model;
+  if (!base || !model) throw new AiError("provider_setup", 0, "");
+
+  const body = {
+    model,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...messages.map((m) => ({ role: m.role === "model" ? "assistant" : "user", content: m.text })),
+    ],
+  };
+
+  const res = await fetch(base + "/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + cfg.key },
+    body: JSON.stringify(body),
+  });
+  const r = await readJson(res);
+  if (!r.ok) throw new AiError("provider_error", r.status, errorText(r.json, r.raw));
+
+  const content = r.json && r.json.choices && r.json.choices[0] && r.json.choices[0].message && r.json.choices[0].message.content;
+  const text = Array.isArray(content)
+    ? content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("").trim()
+    : typeof content === "string" ? content.trim() : "";
+  if (!text) throw new AiError("empty", 0, "");
+  return text;
+}
+
+// Anthropic (Claude) with the user's own key.
+async function askAnthropic(cfg, messages) {
+  const model = cfg.model || PROVIDERS.anthropic.model;
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": cfg.key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 2048,
+      system: SYSTEM_PROMPT,
+      messages: messages.map((m) => ({ role: m.role === "model" ? "assistant" : "user", content: m.text })),
+    }),
+  });
+  const r = await readJson(res);
+  if (!r.ok) throw new AiError("provider_error", r.status, errorText(r.json, r.raw));
+
+  const blocks = r.json && r.json.content;
+  const text = Array.isArray(blocks)
+    ? blocks.map((b) => (b && b.type === "text" && typeof b.text === "string" ? b.text : "")).join("").trim()
+    : "";
+  if (!text) throw new AiError("empty", 0, "");
+  return text;
 }
 
 // No own key: ask the server, which holds the default key.
@@ -583,13 +724,15 @@ async function askViaServer(messages, search) {
 function friendlyAiError(err) {
   if (!(err instanceof AiError)) {
     const text = (err && err.message) || "";
-    if (/failed to fetch|network/i.test(text)) return "No internet connection.";
+    if (/failed to fetch|network|load failed/i.test(text)) {
+      return "Couldn't reach the AI service. Check your internet connection. If you use an Other provider, it must allow requests from a browser.";
+    }
     return text || "Something went wrong.";
   }
 
   switch (err.kind) {
     case "daily_limit":
-      return "You've used today's messages on the shared key. Paste your own Gemini key in Profile to keep chatting, or try again tomorrow.";
+      return "You've used today's messages on the shared key. Add your own API key in Profile to keep chatting, or try again tomorrow.";
     case "no_default_key":
       return "The free public quota has run out. Add your own API key in Profile to continue using the AI service.";
     case "not_signed_in":
@@ -597,19 +740,23 @@ function friendlyAiError(err) {
     case "gemini_busy":
       return "Free limit reached. Wait a bit and try again.";
     case "blocked":
-      return `Google blocked this request (${err.detail}).`;
+      return `The provider blocked this request (${err.detail}).`;
+    case "provider_setup":
+      return "Your provider settings are incomplete. Open Profile and check the base URL and model name.";
     case "empty":
     case "empty_answer":
       return "VIX AI returned no answer. Try again.";
-    case "gemini_error": {
+    case "gemini_error":
+    case "provider_error": {
       const s = err.status;
-      if (s === 400 && /api key/i.test(err.detail)) return "Google rejected the key. Paste a valid Gemini key in Profile.";
-      if (s === 400) return `Bad request (HTTP 400): ${err.detail.slice(0, 160)}`;
-      if (s === 401 || s === 403) return `Google rejected the key or this model isn't allowed (HTTP ${s}). Check your key in Profile.`;
-      if (s === 404) return "Model not found (HTTP 404).";
-      if (s === 429) return "Free limit reached (HTTP 429). Wait a bit and try again.";
-      if (s >= 500) return `Google's server is busy (HTTP ${s}). Try again in a moment.`;
-      return `VIX AI error (HTTP ${s}). ${err.detail.slice(0, 160)}`;
+      const d = (err.detail || "").slice(0, 160);
+      if (s === 400 && /api key|key not valid|invalid.*key/i.test(err.detail)) return "The provider rejected the key. Paste a valid key in Profile.";
+      if (s === 400) return `Bad request (HTTP 400): ${d}`;
+      if (s === 401 || s === 403) return `The provider rejected the key or this model isn't allowed (HTTP ${s}). Check your key in Profile.`;
+      if (s === 404) return "Model or address not found (HTTP 404). Check the model name in Profile.";
+      if (s === 429) return "Limit reached (HTTP 429). Wait a bit and try again.";
+      if (s >= 500) return `The provider's server is busy (HTTP ${s}). Try again in a moment.`;
+      return `VIX AI error (HTTP ${s}). ${d}`;
     }
     default:
       return `VIX AI error (${err.kind}). ${err.detail}`.trim();
@@ -624,7 +771,7 @@ async function sendMessage(raw) {
   if (!text) return;
 
   const quote = replyingTo;
-  const history = geminiHistory(convo);
+  const history = chatHistory(convo);
 
   addBubble(text, "user", quote);
   convo.push({ role: "user", content: text });
@@ -840,7 +987,7 @@ async function openChat(chat) {
   }
   if (data.length === 0) showEmptyState();
 
-  // The AI continues from these messages (see geminiHistory).
+  // The AI continues from these messages (see chatHistory).
   for (const m of data) {
     addBubble(m.content, m.role === "user" ? "user" : "assistant", m.quote);
     convo.push({ role: m.role, content: m.content });
@@ -981,16 +1128,71 @@ if (!SpeechRec) {
 }
 
 // ------------------------------------------------------------
-// Profile page
+// Profile page: the user's own AI key (any provider)
 // ------------------------------------------------------------
+
+// Keys saved by the older Gemini-only version move over once.
+(function migrateOldKey() {
+  const old = (localStorage.getItem(LS_OLD_GEMINI) || "").trim();
+  if (old && !localStorage.getItem(LS_KEY)) {
+    localStorage.setItem(LS_KEY, old);
+    localStorage.setItem(LS_PROVIDER, "gemini");
+  }
+  localStorage.removeItem(LS_OLD_GEMINI);
+})();
+
+function savedAi() {
+  const saved = localStorage.getItem(LS_PROVIDER) || "gemini";
+  return {
+    provider: PROVIDERS[saved] ? saved : "gemini",
+    key: (localStorage.getItem(LS_KEY) || "").trim(),
+    model: (localStorage.getItem(LS_MODEL) || "").trim(),
+    base: (localStorage.getItem(LS_BASE) || "").trim(),
+  };
+}
+
+function fillProviderList() {
+  const select = $("provider");
+  select.innerHTML = "";
+  for (const [id, p] of Object.entries(PROVIDERS)) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = p.label;
+    select.appendChild(option);
+  }
+}
+
+function refreshProviderForm() {
+  const id = $("provider").value;
+  const p = PROVIDERS[id];
+  $("base-wrap").classList.toggle("hidden", id !== "custom");
+  $("model-input").placeholder = p.model
+    ? `Model (optional, default ${p.model})`
+    : "Model name (required)";
+  $("key-hint").textContent = p.hint;
+}
+
+function loadKeyForm() {
+  const s = savedAi();
+  $("provider").value = s.provider;
+  $("model-input").value = s.model;
+  $("base-input").value = s.base;
+  $("key-input").value = "";
+  refreshProviderForm();
+  updateKeyStatus();
+}
+
 function updateKeyStatus() {
-  const has = !!(localStorage.getItem(LS_KEY) || "").trim();
+  const s = savedAi();
+  const has = !!s.key;
   $("key-status").textContent = has
-    ? "Your key is saved in this browser and used for your chats."
+    ? `Your ${PROVIDERS[s.provider].label} key is saved in this browser and used for your chats.`
     : "Not set. VIX AI uses the shared key (limited messages per day).";
   $("key-remove").classList.toggle("hidden", !has);
 }
 
+fillProviderList();
+$("provider").onchange = refreshProviderForm;
 $("profile-back").onclick = () => showScreen("main");
 
 $("opt-search").onchange = () => {
@@ -999,12 +1201,30 @@ $("opt-search").onchange = () => {
 };
 
 $("key-save").onclick = () => {
+  const provider = $("provider").value;
   const key = $("key-input").value.trim();
+  const model = $("model-input").value.trim();
+  const base = $("base-input").value.trim();
+
   if (!key) {
     toast("Paste your key first.");
     return;
   }
+  if (provider === "custom") {
+    if (!/^https?:\/\//i.test(base)) {
+      toast("Enter the base URL of your provider first.");
+      return;
+    }
+    if (!model) {
+      toast("Enter the model name for your provider.");
+      return;
+    }
+  }
+
+  localStorage.setItem(LS_PROVIDER, provider);
   localStorage.setItem(LS_KEY, key);
+  localStorage.setItem(LS_MODEL, model);
+  localStorage.setItem(LS_BASE, provider === "custom" ? base : "");
   $("key-input").value = "";
   searchRefused = false;
   updateKeyStatus();
@@ -1013,6 +1233,10 @@ $("key-save").onclick = () => {
 
 $("key-remove").onclick = () => {
   localStorage.removeItem(LS_KEY);
+  localStorage.removeItem(LS_MODEL);
+  localStorage.removeItem(LS_BASE);
+  $("model-input").value = "";
+  $("base-input").value = "";
   updateKeyStatus();
   toast("Key removed.");
 };

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#0C0C10">
-<meta name="description" content="VIX AI, your personal AI assistant.">
+<meta name="description" content="Vix AI.">
 <title>VIX AI</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -56,7 +56,7 @@
     <div class="brand"><img src="icon.svg" alt="" class="brand-logo"><span>VIX AI</span></div>
     <button id="new-btn" class="circle" type="button" aria-label="New chat">✎</button>
   </header>
-  <div id="status">YOUR AI ASSISTANT</div>
+  <div id="status">VIX AI</div>
 
   <main id="conversation" aria-live="polite"></main>
 
@@ -108,16 +108,22 @@
     <label class="row-card">
       <span class="row-text">
         <span class="row-title">Web search</span>
-        <span class="row-sub">Live info from the web</span>
+        <span class="row-sub">Live info from the web (works with Gemini and the shared key)</span>
       </span>
       <input id="opt-search" type="checkbox" class="switch">
     </label>
 
-    <h3 class="section">Gemini key</h3>
+    <h3 class="section">AI key</h3>
     <div class="row-card col">
-      <span class="row-title">Your own Gemini key</span>
+      <span class="row-title">Use your own AI key</span>
       <span id="key-status" class="row-sub"></span>
+      <select id="provider" aria-label="AI provider"></select>
+      <div id="base-wrap" class="hidden">
+        <input id="base-input" type="url" placeholder="Base URL, for example https://api.example.com/v1" autocomplete="off">
+      </div>
+      <input id="model-input" type="text" placeholder="Model (optional)" autocomplete="off">
       <input id="key-input" type="password" placeholder="Paste your key here" autocomplete="off">
+      <span id="key-hint" class="row-sub"></span>
       <div class="btn-row">
         <button id="key-save" class="btn small primary" type="button">Save key</button>
         <button id="key-remove" class="btn small" type="button">Remove</button>
