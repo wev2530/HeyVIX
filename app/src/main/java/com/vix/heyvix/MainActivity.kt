@@ -867,7 +867,7 @@ class MainActivity : Activity() {
 
     private fun showEmptyState() {
         addMessage(
-            "Hi, I'm VIX AI. Ask me a question, request coding help, " +
+            "Hi, I am Vix. Ask me a question, request coding help, " +
                 "or use a supported phone command.",
             false
         )
@@ -1111,18 +1111,44 @@ class MainActivity : Activity() {
             return
         }
 
-        // "/key AIza..." saves the Gemini API key privately on this phone.
+        // "/key AIza..." saves the API key privately on this phone.
+        // "/key openai sk-..." picks another provider first.
         // It is handled here so the key is never shown as a chat bubble.
         if (command.startsWith("/key ", ignoreCase = true)) {
             input.text.clear()
-            val key = command.substring(5).trim()
+            val rest = command.substring(5).trim()
 
-            if (key.isEmpty()) {
-                addMessage("Type /key followed by your Gemini API key.", false)
+            val firstSpace = rest.indexOf(' ')
+            val named = if (firstSpace > 0) {
+                AiApiClient.findProvider(rest.substring(0, firstSpace))
             } else {
-                AiApiClient.saveKey(this, key)
-                addMessage("Gemini key saved on this phone.", false)
-                status.text = "DONE"
+                null
+            }
+            val key = if (named != null) rest.substring(firstSpace + 1).trim() else rest
+
+            when {
+                key.isEmpty() -> addMessage(
+                    "Type /key followed by your API key. To use another provider, " +
+                        "type /key openai followed by the key. Providers: gemini, " +
+                        "openai, anthropic, openrouter, groq, deepseek, mistral.",
+                    false
+                )
+
+                named != null && named.id == "custom" -> addMessage(
+                    "For Other providers, open Profile, then Keys, and add the " +
+                        "base URL and model name there.",
+                    false
+                )
+
+                else -> {
+                    if (named != null) AiApiClient.saveProvider(this, named)
+                    AiApiClient.saveKey(this, key)
+                    addMessage(
+                        "${AiApiClient.currentProvider(this).label} key saved on this phone.",
+                        false
+                    )
+                    status.text = "DONE"
+                }
             }
             return
         }

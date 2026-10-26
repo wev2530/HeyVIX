@@ -67,6 +67,7 @@ class ProfileActivity : Activity() {
     private lateinit var wakeRow: Row
     private lateinit var assistRow: Row
     private lateinit var speedRow: Row
+    private lateinit var keyRow: Row
 
     private var updating = false
     private var wakeNotifAsked = false
@@ -188,7 +189,11 @@ class ProfileActivity : Activity() {
 
         searchSwitch = Switch(this)
         styleSwitch(searchSwitch)
-        searchRow = addRow("Web search", "Live info from Google", trailing = searchSwitch) {
+        searchRow = addRow(
+            "Web search",
+            "Live info from Google (works with a Gemini key)",
+            trailing = searchSwitch
+        ) {
             searchSwitch.toggle()
         }
         searchSwitch.setOnCheckedChangeListener { _, checked ->
@@ -220,11 +225,7 @@ class ProfileActivity : Activity() {
         // ---------- Keys ----------
         addSection("Keys (saved only on this phone)")
 
-        addRow("Gemini API key", "Needed for VIX AI answers") {
-            promptKey("Gemini API key") { key ->
-                AiApiClient.saveKey(this, key)
-            }
-        }
+        keyRow = addRow("AI key", "") { onAiKeyClicked() }
         addRow("Tavily search key", "Needed for live web info") {
             promptKey("Tavily search key") { key ->
                 TavilyClient.saveKey(this, key)
@@ -282,6 +283,12 @@ class ProfileActivity : Activity() {
         }
 
         speedRow.subtitle.text = speechOutput.speedLabel()
+
+        keyRow.subtitle.text = if (AiApiClient.hasKey(this)) {
+            "${AiApiClient.currentProvider(this).label} key saved. Tap to change."
+        } else {
+            "Not set. Needed for VIX AI answers. Works with any provider."
+        }
 
         updating = false
     }
@@ -477,6 +484,101 @@ class ProfileActivity : Activity() {
             .setSingleChoiceItems(labels, current) { _, which -> chosen = which }
             .setPositiveButton("Use it") { _, _ ->
                 speechOutput.chooseVoice(options[chosen].name)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Step 1 of the AI key: choose the provider. */
+    private fun onAiKeyClicked() {
+        val providers = AiApiClient.PROVIDERS
+        val labels = providers.map { it.label }.toTypedArray()
+        val current = providers
+            .indexOfFirst { it.id == AiApiClient.currentProvider(this).id }
+            .coerceAtLeast(0)
+        var chosen = current
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Choose your AI provider")
+            .setSingleChoiceItems(labels, current) { _, which -> chosen = which }
+            .setPositiveButton("Next") { _, _ -> showKeyForm(providers[chosen]) }
+            .setNegativeButton("Cancel", null)
+
+        if (AiApiClient.hasKey(this)) {
+            dialog.setNeutralButton("Remove key") { _, _ ->
+                AiApiClient.removeKey(this)
+                toast("Key removed.")
+                refresh()
+            }
+        }
+
+        dialog.show()
+    }
+
+    /** Step 2 of the AI key: key, model and (for Other providers) base URL. */
+    private fun showKeyForm(provider: AiApiClient.Provider) {
+        val sameProvider = provider.id == AiApiClient.currentProvider(this).id
+        val isCustom = provider.id == "custom"
+
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+        }
+
+        form.addView(
+            TextView(this).apply {
+                text = provider.hint
+                textSize = 13f
+                setPadding(0, 0, 0, dp(8))
+            }
+        )
+
+        val baseBox = EditText(this).apply {
+            hint = "Base URL, for example https://api.example.com/v1"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            if (sameProvider) setText(AiApiClient.currentBase(this@ProfileActivity))
+        }
+
+        val modelBox = EditText(this).apply {
+            hint = if (provider.defaultModel.isBlank()) {
+                "Model name (required)"
+            } else {
+                "Model (optional, default ${provider.defaultModel})"
+            }
+            inputType = InputType.TYPE_CLASS_TEXT
+            if (sameProvider) setText(AiApiClient.currentModel(this@ProfileActivity))
+        }
+
+        val keyBox = EditText(this).apply {
+            hint = "Paste your key here"
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+
+        if (isCustom) form.addView(baseBox)
+        form.addView(modelBox)
+        form.addView(keyBox)
+
+        AlertDialog.Builder(this)
+            .setTitle("${provider.label} key")
+            .setView(form)
+            .setPositiveButton("Save") { _, _ ->
+                val key = keyBox.text.toString().trim()
+                val model = modelBox.text.toString().trim()
+                val base = baseBox.text.toString().trim()
+
+                when {
+                    key.isEmpty() -> toast("Nothing was saved. Paste your key first.")
+                    isCustom && !base.startsWith("http", ignoreCase = true) ->
+                        toast("Nothing was saved. Enter the base URL of your provider.")
+                    isCustom && model.isEmpty() ->
+                        toast("Nothing was saved. Enter the model name for your provider.")
+                    else -> {
+                        AiApiClient.saveSettings(this, provider, key, model, base)
+                        toast("Saved on this phone.")
+                        refresh()
+                    }
+                }
             }
             .setNegativeButton("Cancel", null)
             .show()
