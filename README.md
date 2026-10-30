@@ -1,21 +1,20 @@
 <div align="center">
 
-# 🎙️ Vix
+<h1>🎙️ Vix</h1>
 
-### Your personal assistant and AI chat, on Android and on the web
+<h3>Your personal assistant and AI chat, on Android and on the web</h3>
 
-[
+<p>
+  <a href="https://github.com/wev2530/HeyVIX/releases/latest">
+    <img src="https://img.shields.io/badge/Download-Android%20App-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download Android App">
+  </a>
+  &nbsp;
+  <a href="https://vix-ai.netlify.app">
+    <img src="https://img.shields.io/badge/Open-Web%20App-blue?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Open Web App">
+  </a>
+</p>
 
-![Download APK](https://img.shields.io/badge/Download-Android%20App-3DDC84?style=for-the-badge&logo=android&logoColor=white)
-
-](https://github.com/wev2530/HeyVIX/releases/latest)
-[
-
-![Open Web App](https://img.shields.io/badge/Open-Web%20App-blue?style=for-the-badge&logo=googlechrome&logoColor=white)
-
-](https://vix-ai.netlify.app)
-
-*Built by **GCV Designs***
+<p><em>Built by <strong>GCV Designs</strong></em></p>
 
 </div>
 
@@ -141,6 +140,6 @@ Found a bug or have an idea? Open an **[Issue](https://github.com/wev2530/HeyVIX
 
 <div align="center">
 
-**Made with ❤️ by GCV Designs**
+<strong>Made with ❤️ by GCV Designs</strong>
 
 </div>
