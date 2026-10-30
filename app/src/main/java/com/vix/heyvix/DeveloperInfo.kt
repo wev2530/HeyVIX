@@ -11,6 +11,8 @@ import android.net.Uri
 object DeveloperInfo {
 
     const val NAME = "GCV Designs"
+    const val ROLE = "Software developer"
+    const val ORGANIZATION = "Great Minds in Tech Foundation"
     const val WHATSAPP_LINK = "https://wa.me/2348126844814"
 
     private val strongPhrases = listOf(
@@ -55,20 +57,18 @@ object DeveloperInfo {
 
     /** Short line shown above the developer card. */
     fun shortMessage(): String =
-        "VIX AI was designed and developed by $NAME."
+        "VIX AI was developed by a software developer who works at $ORGANIZATION."
 
     /** Text version including the contact link. */
     fun message(): String =
         "VIX AI developer\n\n" +
-            "$NAME\n" +
-            "Designer and developer of VIX AI\n" +
-            "Focus: upcoming apps and AI\n" +
+            "$ROLE at $ORGANIZATION\n" +
             "WhatsApp: $WHATSAPP_LINK"
 
     /** Text used for spoken responses. */
     fun spokenMessage(): String =
-        "VIX AI was designed and built by G C V Designs, who works on " +
-            "upcoming apps and A I. You can message the developer on " +
+        "VIX AI was developed by a software developer who works at " +
+            "$ORGANIZATION. You can message the developer on " +
             "WhatsApp. The contact card is on your screen."
 
     /** Opens WhatsApp. Returns false if the action fails. */

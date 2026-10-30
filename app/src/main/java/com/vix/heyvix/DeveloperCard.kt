@@ -111,12 +111,12 @@ object DeveloperCard {
             setTextColor(white)
         })
         texts.addView(TextView(context).apply {
-            text = "Developer of VIX AI"
+            text = DeveloperInfo.ROLE
             textSize = 12f
             setTextColor(muted)
         })
         texts.addView(TextView(context).apply {
-            text = "Upcoming apps and AI"
+            text = DeveloperInfo.ORGANIZATION
             textSize = 12f
             setTextColor(muted)
         })
