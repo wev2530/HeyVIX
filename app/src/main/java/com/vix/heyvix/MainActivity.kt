@@ -1296,6 +1296,16 @@ class MainActivity : Activity() {
             showDeveloperCard()
             return
         }
+        
+                // "List commands" / "What can you do": answered here, in both modes.
+        if (CommandList.isAsking(rawCommand)) {
+            val list = CommandList.message()
+            addMessage(list, false)
+            persist("assistant", list, null)
+            status.text = "DONE"
+            speechOutput.speak(CommandList.spokenMessage())
+            return
+        }
 
         status.text = "WORKING…"
 

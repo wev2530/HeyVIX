@@ -30,7 +30,7 @@ import android.widget.TextView
  * Live info requests (news, scores, prices, weather, "search for ...") are
  * answered by the assistant itself with Tavily when a Tavily key is saved.
  *
- * Questions about the developer are answered locally (DeveloperInfo),
+ * Questions about the developer are answered locallyDeveloperInfo),
  * in both modes, with a button that opens the developer's WhatsApp.
  */
 class VixOverlayPanel(
@@ -430,6 +430,14 @@ class VixOverlayPanel(
         // without asking the AI.
         if (DeveloperInfo.isAbout(text)) {
             showDeveloper()
+            return
+        }
+        
+                // "List commands" / "What can you do": answered here, in both modes.
+        if (CommandList.isAsking(text)) {
+            status.text = "DONE"
+            showReply(CommandList.message())
+            speakReply(CommandList.spokenMessage())
             return
         }
 
