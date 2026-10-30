@@ -5,7 +5,7 @@
 <h3>Your personal assistant and AI chat, on Android and on the web</h3>
 
 <p>
-  <a href="https://github.com/wev2530/HeyVIX/releases/latest">
+  <a href="https://github.com/wev2530/HeyVIX/releases/download/latest/VIX.apk">
     <img src="https://img.shields.io/badge/Download-Android%20App-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download Android App">
   </a>
   &nbsp;
@@ -73,10 +73,10 @@ Both use the **same account**, so your chats follow you from your phone to your 
 | Platform | Link |
 |---|---|
 | 🌐 **Web app** | **https://vix-ai.netlify.app** |
-| 📱 **Android app (latest APK)** | **https://github.com/wev2530/HeyVIX/releases/latest** |
+| 📱 **Android app (latest APK)** | **https://github.com/wev2530/HeyVIX/releases/download/latest/VIX.apk** |
 
 ### Installing the Android app
-1. Open the **[latest release](https://github.com/wev2530/HeyVIX/releases/latest)**.
+1. Open the **[latest release](https://github.com/wev2530/HeyVIX/releases/download/latest/VIX.apk)**.
 2. Under **Assets**, download the **Vix APK** file.
 3. Open the file on your phone. If asked, allow **Install from this source** in settings.
 4. Open Vix, sign up or log in, and grant the permissions it asks for (microphone, overlay).
