@@ -1,88 +1,146 @@
-# VIX (Hey VIX)
+<div align="center">
 
-**Your personal assistant on Android.** Talk or type, and VIX answers questions, controls your phone and looks things up on the web. All of it is in one app, with your chats saved to your account.
+# 🎙️ Vix
 
----
+### Your personal assistant and AI chat, on Android and on the web
 
-## Download
+[
 
-**[Download the latest VIX APK](https://github.com/wev2530/HeyVIX/releases/latest)**
+![Download APK](https://img.shields.io/badge/Download-Android%20App-3DDC84?style=for-the-badge&logo=android&logoColor=white)
 
-The file comes as a `.zip`. Open it and install the `.apk` inside.
+](https://github.com/wev2530/HeyVIX/releases/latest)
+[
 
-### How to install
+![Open Web App](https://img.shields.io/badge/Open-Web%20App-blue?style=for-the-badge&logo=googlechrome&logoColor=white)
 
-1. Download the file above on your Android phone and unzip it.
-2. Tap the `.apk`. If Android asks, allow **Install unknown apps** for your browser or file manager.
-3. Open **VIX**, create an account (email or Google) and you're in.
+](https://vix-ai.netlify.app)
 
-Needs Android 8.0 or newer.
+*Built by **GCV Designs***
 
----
-
-## The problem VIX solves
-
-Phone assistants are split into pieces. One app answers questions, another controls the phone, another searches the web, and none of them remember your conversations in a way you control.
-
-VIX puts these together in one place:
-
-- **Ask anything** and get an AI answer, without switching apps.
-- **Control your phone** by voice or text, hands free.
-- **Get live information** such as news, scores, prices and weather, not only what an AI learned in the past.
-- **Keep your conversations** in an account, so your chat history is there when you come back.
+</div>
 
 ---
 
-## What VIX can do
+## 📖 What is Vix?
 
-- **AI answers**: ask questions, get help with writing or code, have a conversation. Turn VIX AI on or off any time.
-- **Phone commands**: turn the flashlight on, open the camera, take a screenshot, record your screen.
-- **Live web info**: ask for the latest news, scores, prices or weather, or say "search for ...".
-- **Voice in and out**: speak to VIX and hear its answers. Choose the voice and the speed.
-- **Hey VIX wake word**: say "Hey VIX", "Hi VIX" or "Hello VIX", with or without a request, like "Hey VIX open camera".
-- **Power button assistant**: set VIX as your phone's digital assistant and hold the power button to open it.
-- **Chat history**: every chat is saved to your account. Open the left menu to search, reopen, rename or delete chats.
-- **Swipe to reply**: swipe a message to reply to it.
-- **Sign in**: email and password, or Continue with Google.
-- **Your privacy**: your Gemini and Tavily keys stay on your phone only.
+Vix is an assistant that lives in two places:
+
+1. **Vix for Android**: a full app with a built-in personal assistant (voice, quick commands, overlay) plus **Vix AI** chat.
+2. **Vix on the Web**: a website/PWA with the same **Vix AI** chat, which works on any phone, tablet or computer with no install.
+
+Both use the **same account**, so your chats follow you from your phone to your laptop.
+
+> **Vix** is the personal assistant. **Vix AI** is the smart chat part that answers questions in depth. You choose when to use it.
 
 ---
 
-## Using VIX
+## ❗ The problem Vix solves
 
-1. **Left menu (the menu button)**: your chat history, search, and New chat.
-2. **Plus button**: quick commands like flashlight, camera and screenshot.
-3. **Profile (bottom of the left menu)**: all the settings, including VIX AI on or off, web search, the wake word, the power button assistant, voice and speed, your keys, deleting your chat history, and logging out.
+- Most assistants send everything to the cloud, even simple tasks that should be instant.
+- AI chat apps are separate from your phone's assistant, so you juggle several apps.
+- Your chats are stuck on one device.
+- Many AI apps lock you to one provider and one key.
 
-### Setting up the AI and web search
-
-VIX AI uses your own keys, saved only on your phone:
-
-1. Open **Profile**.
-2. Add your **Gemini API key** for AI answers.
-3. Add your **Tavily search key** for live web info.
+**Vix puts these together:** quick tasks are handled by the personal assistant, harder questions go to Vix AI, and everything syncs to your account.
 
 ---
 
-## Build it yourself
+## ✨ Features
 
-1. Clone this repo and open it in Android Studio.
-2. In `SupabaseConfig.kt`, set the address and public key of your own Supabase project. It needs the `chats` and `messages` tables with Row Level Security turned on.
-3. Build and run on a phone or emulator.
+### 📱 Android app
+- **Personal assistant** that handles commands itself, without always needing the AI
+- **Voice activation** with a wake word and quick commands
+- **Overlay mode switch** to change between *AI mode on*, *Web search* and *AI mode off* from anywhere
+- **Ask before forwarding:** if the assistant can't answer, it tells you and asks whether to send the question to Vix AI. It never forwards silently.
+- **Vix AI chat** with chat history in a side drawer
+- **Profile page** holding all settings (AI on/off, web search, wake word, quick commands, voice, API key)
+- **Email and Google sign-in**
+
+### 🌐 Web app
+- The same **Vix AI** chat in your browser
+- Full-width desktop layout, also works on phones
+- Same account and synced chat history as the Android app
+- **Web search** (Tavily) and **link reading** for current information
+- Bring your own API key from **any supported provider**, or use the default
+
+### 🔐 Shared
+- Accounts, chat history and secure backend on **Supabase**
+- Web search cannot be turned on while AI mode is off, which keeps the modes consistent
 
 ---
 
-## Built with
+## 🚀 Get Vix
 
-- Kotlin and plain Android views
-- Supabase for accounts and chat history
-- Google Gemini for AI answers
-- Tavily for live web search
+| Platform | Link |
+|---|---|
+| 🌐 **Web app** | **https://vix-ai.netlify.app** |
+| 📱 **Android app (latest APK)** | **https://github.com/wev2530/HeyVIX/releases/latest** |
+
+### Installing the Android app
+1. Open the **[latest release](https://github.com/wev2530/HeyVIX/releases/latest)**.
+2. Under **Assets**, download the **Vix APK** file.
+3. Open the file on your phone. If asked, allow **Install from this source** in settings.
+4. Open Vix, sign up or log in, and grant the permissions it asks for (microphone, overlay).
 
 ---
 
-## Developer
+## 🧭 How to use it
 
-Made by [wev2530](https://github.com/wev2530).
+1. **Sign up** with email or Google (same account on app and web).
+2. Open the **left menu** to see your chat history, and the **profile icon** at the bottom for settings.
+3. **Choose your mode:**
+   - **AI mode ON**: questions go to Vix AI
+   - **Web search**: Vix AI uses live search for current information
+   - **AI mode OFF**: only the personal assistant works
+4. *(Optional)* Add **your own API key** in settings if you don't want to use the default.
 
-Found a bug or have an idea? [Open an issue](https://github.com/wev2530/HeyVIX/issues).
+---
+
+## ✅ Pros and ❌ Cons
+
+| ✅ Pros | ❌ Cons |
+|---|---|
+| Assistant and AI chat in one app | Android app is not on the Play Store yet (install via APK) |
+| Same account and chats on phone and web | Vix AI needs an internet connection |
+| Doesn't send everything to the AI, so quick tasks stay fast | Free-tier AI keys have usage limits |
+| Asks before forwarding to AI, so you stay in control | Web app has no personal-assistant features (voice, overlay) |
+| Bring your own key from any provider | iOS app not available |
+| Live web search and link reading | Answers depend on the AI provider you choose |
+
+---
+
+## 🏗️ Project structure
+
+```
+HeyVIX/
+├── app/                 # Android app (Kotlin)
+├── web/                 # Website / PWA
+├── supabase/
+│   └── functions/
+│       └── gemini-chat  # Backend function for AI chat
+└── README.md
+```
+
+**Built with:** Kotlin (Android), HTML/CSS/JavaScript (web), Supabase (auth, database, edge functions), Gemini and other AI providers, Tavily (web search), Netlify (hosting).
+
+---
+
+## ⚠️ Notes
+
+- Vix AI can make mistakes. Check important information.
+- Your API key is yours: only add keys you trust the app with.
+
+---
+
+## 📬 Contact
+
+Developed by **GCV Designs**.
+Found a bug or have an idea? Open an **[Issue](https://github.com/wev2530/HeyVIX/issues)**.
+
+---
+
+<div align="center">
+
+**Made with ❤️ by GCV Designs**
+
+</div>
