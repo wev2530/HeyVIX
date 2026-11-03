@@ -19,16 +19,22 @@ import java.util.concurrent.Executors
  * grounding for live info), OpenAI, Anthropic (Claude), OpenRouter, Groq,
  * DeepSeek, Mistral, or any other provider that copies the OpenAI chat API.
  *
- * The API key is never stored in the repo. Add it on the profile page
- * (Keys, AI key) or type "/key AIza..." in the chat to save it privately
- * on this phone. "/key openai sk-..." picks another provider.
+ * With NO key saved, the app asks the Supabase function "gemini-chat", which
+ * holds the shared default Gemini key (secret GEMINI_API_KEY) on the server.
+ * That key never reaches the phone. The user must be logged in, and a daily
+ * message limit applies.
+ *
+ * Users can add their own key on the profile page (Keys, AI key) or type
+ * "/key AIza..." in the chat to save it privately on this phone.
+ * "/key openai sk-..." picks another provider. Their own key skips the server.
  *
  * Optional settings live in assets/ai_config.json:
  *   model (Gemini default), system_prompt, timeout_seconds
  *
- * Web search is controlled by the switch in the VIX overlay (off by default)
- * and only works with Gemini. A single call can also force search off with
- * allowSearch = false.
+ * Web search is controlled by the switch in the VIX overlay (off by default).
+ * With the shared key it runs on the server (Tavily). With the user's own
+ * Gemini key it uses Google Search. A single call can also force search off
+ * with allowSearch = false.
  */
 class AiApiClient(context: Context) {
 
@@ -298,23 +304,19 @@ class AiApiClient(context: Context) {
 
     private fun ask(message: String, allowSearch: Boolean): Result {
         val key = apiKey()
-        if (key.isBlank()) {
-            return Result(
-                false,
-                "No AI key saved yet. Open Profile, then Keys, and add one. " +
-                    "Or type /key followed by your key. " +
-                    "You can get a free Gemini key at aistudio.google.com."
-            )
-        }
-
         val provider = currentProvider(appContext)
         val systemPrompt = config.optString("system_prompt", DEFAULT_SYSTEM).ifBlank { DEFAULT_SYSTEM }
         val timeoutMs = config.optInt("timeout_seconds", 60) * 1000
 
-        val text = when (provider.kind) {
-            "gemini" -> askGemini(key, message, allowSearch, systemPrompt, timeoutMs)
-            "anthropic" -> askAnthropic(key, provider, message, systemPrompt, timeoutMs)
-            else -> askOpenAi(key, provider, message, systemPrompt, timeoutMs)
+        val text = if (key.isBlank()) {
+            // No own key: the server holds the shared default key.
+            askViaServer(message, allowSearch, timeoutMs)
+        } else {
+            when (provider.kind) {
+                "gemini" -> askGemini(key, message, allowSearch, systemPrompt, timeoutMs)
+                "anthropic" -> askAnthropic(key, provider, message, systemPrompt, timeoutMs)
+                else -> askOpenAi(key, provider, message, systemPrompt, timeoutMs)
+            }
         }
 
         // Remember this exchange (only after success).
@@ -325,6 +327,71 @@ class AiApiClient(context: Context) {
         }
 
         return Result(true, text)
+    }
+
+    // ----------------------------------------------------------
+    // The shared default key, kept on the server (Supabase)
+    // ----------------------------------------------------------
+
+    private fun askViaServer(
+        message: String,
+        allowSearch: Boolean,
+        timeoutMs: Int
+    ): String {
+        val token = SupabaseAuth.accessToken(appContext)
+            ?: throw Exception("Please log in again to use VIX AI.")
+
+        val messages = JSONArray()
+        for ((role, text) in history) {
+            messages.put(JSONObject().put("role", role).put("text", text))
+        }
+        messages.put(JSONObject().put("role", "user").put("text", message))
+
+        val body = JSONObject()
+            .put("messages", messages)
+            .put("search", allowSearch && isWebSearchOn(appContext))
+
+        val response = try {
+            postJson(
+                SupabaseConfig.URL + "/functions/v1/gemini-chat",
+                mapOf(
+                    "Authorization" to "Bearer $token",
+                    "apikey" to SupabaseConfig.PUBLISHABLE_KEY
+                ),
+                body,
+                timeoutMs
+            )
+        } catch (e: ApiException) {
+            throw Exception(serverMessage(e.message.orEmpty(), e.status) ?: describe(e))
+        }
+
+        val error = response.optString("error", "")
+        if (error.isNotBlank()) {
+            throw Exception(
+                serverMessage(error, 200)
+                    ?: ("VIX AI error ($error). " + response.optString("detail", ""))
+            )
+        }
+
+        val text = response.optString("text", "").trim()
+        if (text.isBlank()) throw Exception("VIX AI returned no answer. Try again.")
+        return text
+    }
+
+    /** Turns the server's error codes into clear messages. Null if unknown. */
+    private fun serverMessage(code: String, status: Int): String? = when {
+        code == "daily_limit" ->
+            "You've used today's messages on the shared key. Add your own API key " +
+                "in Profile to keep chatting, or try again tomorrow."
+        code == "no_default_key" ->
+            "The free public quota has run out. Add your own API key in Profile " +
+                "to continue using VIX AI."
+        code == "not_signed_in" || status == 401 ->
+            "Please log in again to use VIX AI."
+        code == "gemini_busy" -> "Free limit reached. Wait a bit and try again."
+        code == "blocked" -> "The provider blocked this request."
+        code == "empty_answer" -> "VIX AI returned no answer. Try again."
+        else -> null
     }
 
     // ----------------------------------------------------------
