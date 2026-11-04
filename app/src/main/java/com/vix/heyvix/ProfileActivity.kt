@@ -19,6 +19,7 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -29,7 +30,8 @@ import android.widget.Toast
 /**
  * The profile page, opened from the profile icon in the left menu.
  * Holds every setting: VIX AI, web search, wake word, power button,
- * voice and speed, keys, account, app version, chat history and log out.
+ * voice and speed, keys, connections, account, app version, chat history
+ * and log out.
  */
 class ProfileActivity : Activity() {
 
@@ -69,6 +71,11 @@ class ProfileActivity : Activity() {
     private lateinit var speedRow: Row
     private lateinit var keyRow: Row
 
+    // Connections: one row per service, and what the server says is connected.
+    private val connRows = HashMap<String, Row>()
+    private var connModes: Map<String, String> = emptyMap()
+    private var connLoaded = false
+
     private var updating = false
     private var wakeNotifAsked = false
 
@@ -92,6 +99,7 @@ class ProfileActivity : Activity() {
 
         buildInterface()
         refresh()
+        loadConnections()
     }
 
     override fun onResume() {
@@ -232,6 +240,15 @@ class ProfileActivity : Activity() {
             }
         }
 
+        // ---------- Connections ----------
+        addSection("Connections (work only with your own AI key)")
+
+        for (service in AgentClient.SERVICES) {
+            connRows[service.id] = addRow(service.label, "Checking…") {
+                onConnectionClicked(service)
+            }
+        }
+
         // ---------- Account ----------
         addSection("Account")
 
@@ -287,10 +304,145 @@ class ProfileActivity : Activity() {
         keyRow.subtitle.text = if (AiApiClient.hasKey(this)) {
             "${AiApiClient.currentProvider(this).label} key saved. Tap to change."
         } else {
-            "Not set. Needed for VIX AI answers. Works with any provider."
+            "Not set. VIX uses the shared key (limited messages per day). " +
+                "Add your own key to remove the limit. Works with any provider."
         }
 
+        renderConnections()
+
         updating = false
+    }
+
+    // ----------------------------------------------------------
+    // Connections (GitHub, Supabase, Webflow, Dropbox)
+    // ----------------------------------------------------------
+
+    private fun loadConnections() {
+        AgentClient.list(this) { out ->
+            if (isFinishing || isDestroyed) return@list
+            if (out.ok) {
+                connModes = out.modes
+                connLoaded = true
+            }
+            renderConnections()
+        }
+    }
+
+    private fun renderConnections() {
+        val hasOwnKey = AiApiClient.hasKey(this)
+
+        for (service in AgentClient.SERVICES) {
+            val row = connRows[service.id] ?: continue
+            val mode = connModes[service.id]
+
+            row.subtitle.text = when {
+                mode == null && connLoaded -> "Not connected. Tap to connect."
+                mode == null -> "Tap to connect."
+                !hasOwnKey ->
+                    "Connected, but VIX only uses it with your own AI key. Add one under Keys."
+                mode == "write" -> "Connected. VIX can make changes, and asks you first."
+                else -> "Connected. VIX can only read."
+            }
+        }
+    }
+
+    private fun onConnectionClicked(service: AgentClient.Service) {
+        val mode = connModes[service.id]
+
+        if (mode == null) {
+            showConnectForm(service, false)
+            return
+        }
+
+        val write = mode == "write"
+        val items = arrayOf(
+            "Change token",
+            if (write) "Switch to read only" else "Allow changes (it asks you first)",
+            "Disconnect"
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle(service.label)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showConnectForm(service, write)
+                    1 -> AgentClient.setMode(this, service.id, !write) { out ->
+                        onConnectionResult(out, "Updated.")
+                    }
+                    else -> confirmDisconnect(service)
+                }
+            }
+            .show()
+    }
+
+    private fun showConnectForm(service: AgentClient.Service, currentWrite: Boolean) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+        }
+
+        form.addView(
+            TextView(this).apply {
+                text = service.hint
+                textSize = 13f
+                setPadding(0, 0, 0, dp(8))
+            }
+        )
+
+        val tokenBox = EditText(this).apply {
+            hint = "Paste your token here"
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        form.addView(tokenBox)
+
+        val writeBox = CheckBox(this).apply {
+            text = "Allow VIX to make changes (it always asks you first)"
+            isChecked = currentWrite
+        }
+        form.addView(writeBox)
+
+        AlertDialog.Builder(this)
+            .setTitle("Connect ${service.label}")
+            .setView(form)
+            .setPositiveButton("Save") { _, _ ->
+                val token = tokenBox.text.toString().trim()
+                if (token.isEmpty()) {
+                    toast("Nothing was saved. Paste your token first.")
+                } else {
+                    toast("Checking the token…")
+                    AgentClient.save(this, service.id, token, writeBox.isChecked) { out ->
+                        onConnectionResult(out, "${service.label} connected.")
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun confirmDisconnect(service: AgentClient.Service) {
+        AlertDialog.Builder(this)
+            .setTitle("Disconnect ${service.label}?")
+            .setMessage("Your saved token is deleted from the server.")
+            .setPositiveButton("Disconnect") { _, _ ->
+                AgentClient.remove(this, service.id) { out ->
+                    onConnectionResult(out, "${service.label} disconnected.")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun onConnectionResult(out: AgentClient.Out, okMessage: String) {
+        if (isFinishing || isDestroyed) return
+
+        toast(if (out.ok) okMessage else out.message)
+
+        if (out.ok) {
+            connModes = out.modes
+            connLoaded = true
+            renderConnections()
+        }
     }
 
     // ----------------------------------------------------------

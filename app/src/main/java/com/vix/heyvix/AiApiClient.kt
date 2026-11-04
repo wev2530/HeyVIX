@@ -1,32 +1,45 @@
 package com.vix.heyvix
 
+import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
+import java.lang.ref.WeakReference
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Talks to the AI provider the user picked: Google Gemini (with Google Search
  * grounding for live info), OpenAI, Anthropic (Claude), OpenRouter, Groq,
  * DeepSeek, Mistral, or any other provider that copies the OpenAI chat API.
  *
- * With NO key saved, the app asks the Supabase function "gemini-chat", which
- * holds the shared default Gemini key (secret GEMINI_API_KEY) on the server.
- * That key never reaches the phone. The user must be logged in, and a daily
- * message limit applies.
+ * Three ways a message can be answered:
  *
- * Users can add their own key on the profile page (Keys, AI key) or type
- * "/key AIza..." in the chat to save it privately on this phone.
- * "/key openai sk-..." picks another provider. Their own key skips the server.
+ * 1. NO own key saved: the app asks the Supabase function "gemini-chat", which
+ *    holds the shared default Gemini key (secret GEMINI_API_KEY) on the server.
+ *    That key never reaches the phone. The user must be logged in, and a daily
+ *    message limit applies. Connections (tools) are NOT used here.
+ *
+ * 2. Own key saved, no Connections: the app calls the provider directly.
+ *
+ * 3. Own key saved AND at least one Connection (GitHub, Supabase, Webflow,
+ *    Dropbox): the app asks the Supabase function "vix-agent", which lets the
+ *    AI use those services as tools, with the user's own key for that one
+ *    request. Anything that changes something asks the user first.
+ *
+ * Users add their own key on the profile page (Keys, AI key) or type
+ * "/key AIza..." in the chat. "/key openai sk-..." picks another provider.
  *
  * Optional settings live in assets/ai_config.json:
  *   model (Gemini default), system_prompt, timeout_seconds
@@ -225,9 +238,17 @@ class AiApiClient(context: Context) {
 
     private class ApiException(val status: Int, message: String) : Exception(message)
 
+    /** One action the AI wants to do that needs the user's approval. */
+    private class Approval(val id: String, val name: String, val summary: String)
+
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
+
+    // The screen that created this client (if any). Approval questions are shown
+    // on it. When there is none (for example the overlay), changes are declined.
+    private val activityRef: WeakReference<Activity>? =
+        (context as? Activity)?.let { WeakReference(it) }
 
     // Recent conversation so follow-up questions work: (role, text)
     // Roles here are "user" and "model"; each provider converts them as needed.
@@ -309,10 +330,18 @@ class AiApiClient(context: Context) {
         val timeoutMs = config.optInt("timeout_seconds", 60) * 1000
 
         val text = if (key.isBlank()) {
-            // No own key: the server holds the shared default key.
+            // No own key: the server holds the shared default key (no tools).
             askViaServer(message, allowSearch, timeoutMs)
         } else {
-            when (provider.kind) {
+            // Own key: tools from Connections are used when there are any.
+            AgentClient.refreshIfStale(appContext)
+            val viaAgent = if (AgentClient.hasConnections(appContext)) {
+                askViaAgent(key, provider, message, timeoutMs)
+            } else {
+                null
+            }
+
+            viaAgent ?: when (provider.kind) {
                 "gemini" -> askGemini(key, message, allowSearch, systemPrompt, timeoutMs)
                 "anthropic" -> askAnthropic(key, provider, message, systemPrompt, timeoutMs)
                 else -> askOpenAi(key, provider, message, systemPrompt, timeoutMs)
@@ -392,6 +421,139 @@ class AiApiClient(context: Context) {
         code == "blocked" -> "The provider blocked this request."
         code == "empty_answer" -> "VIX AI returned no answer. Try again."
         else -> null
+    }
+
+    // ----------------------------------------------------------
+    // Tools from Connections (GitHub, Supabase, Webflow, Dropbox)
+    // ----------------------------------------------------------
+
+    /**
+     * Returns the answer, or null when the server says there are no
+     * connections (then the normal direct call is used instead).
+     */
+    private fun askViaAgent(
+        key: String,
+        provider: Provider,
+        message: String,
+        timeoutMs: Int
+    ): String? {
+        val messages = JSONArray()
+        for ((role, text) in history) {
+            messages.put(JSONObject().put("role", role).put("text", text))
+        }
+        messages.put(JSONObject().put("role", "user").put("text", message))
+
+        // The same fields go with every step of this one request.
+        fun common(): JSONObject = JSONObject()
+            .put("action", "chat")
+            .put("provider", provider.id)
+            .put("key", key)
+            .put("model", currentModel(appContext))
+            .put("base", if (provider.id == "custom") currentBase(appContext) else "")
+
+        var body = common().put("messages", messages)
+        val readMs = maxOf(timeoutMs, 130000)
+
+        for (round in 0 until 5) {
+            val response = AgentClient.post(appContext, body, readMs).json
+
+            val error = response.optString("error", "")
+            if (error.isNotBlank()) {
+                if (error == "no_connections") {
+                    AgentClient.clearCache(appContext)
+                    return null
+                }
+                throw Exception(agentMessage(error, response))
+            }
+
+            val confirm = response.optJSONArray("confirm")
+            if (confirm != null && confirm.length() > 0) {
+                val items = ArrayList<Approval>()
+                for (i in 0 until confirm.length()) {
+                    val c = confirm.optJSONObject(i) ?: continue
+                    items.add(
+                        Approval(
+                            c.optString("id", ""),
+                            c.optString("name", ""),
+                            c.optString("summary", "")
+                        )
+                    )
+                }
+
+                val decided = askApproval(items)
+                val decisions = JSONObject()
+                for ((id, allowed) in decided) decisions.put(id, allowed)
+
+                body = common()
+                    .put("state", response.optJSONArray("state") ?: JSONArray())
+                    .put("decisions", decisions)
+                continue
+            }
+
+            val text = response.optString("text", "").trim()
+            if (text.isBlank()) throw Exception("VIX AI returned no answer. Try again.")
+            return text
+        }
+
+        throw Exception("That needed too many approval steps. Try a simpler request.")
+    }
+
+    /**
+     * Asks the user to allow or deny the changes the AI wants to make.
+     * Waits for the answer (up to 3 minutes). Blocking: worker thread only.
+     * Without a screen to ask on, everything is declined.
+     */
+    private fun askApproval(items: List<Approval>): Map<String, Boolean> {
+        val activity = activityRef?.get()
+        if (activity == null || activity.isFinishing || activity.isDestroyed) {
+            return items.associate { it.id to false }
+        }
+
+        val latch = CountDownLatch(1)
+        val allowed = HashMap<String, Boolean>()
+
+        mainHandler.post {
+            val text = items.joinToString("\n\n") {
+                "• " + it.summary.ifBlank { it.name }
+            }
+
+            try {
+                AlertDialog.Builder(activity)
+                    .setTitle("Allow VIX to do this?")
+                    .setMessage(text)
+                    .setCancelable(false)
+                    .setPositiveButton("Allow") { _, _ ->
+                        for (item in items) allowed[item.id] = true
+                        latch.countDown()
+                    }
+                    .setNegativeButton("Deny") { _, _ ->
+                        for (item in items) allowed[item.id] = false
+                        latch.countDown()
+                    }
+                    .show()
+            } catch (e: Exception) {
+                latch.countDown()
+            }
+        }
+
+        latch.await(180, TimeUnit.SECONDS)
+        return items.associate { it.id to (allowed[it.id] == true) }
+    }
+
+    private fun agentMessage(code: String, response: JSONObject): String = when (code) {
+        "not_configured" -> "Connections aren't set up on the server yet."
+        "not_signed_in", "http_401" -> "Please log in again to use VIX AI."
+        "provider_error" ->
+            "The AI provider returned an error (HTTP ${response.optInt("status")}). " +
+                response.optString("detail", "").take(160)
+        "provider_setup" ->
+            "Your provider settings are incomplete. Open Profile, Keys, " +
+                "and check the base URL and model name."
+        "too_many_steps" -> "I used too many steps. Try a simpler request."
+        "timeout" -> "That took too long. Try a simpler request."
+        "empty_answer" -> "VIX AI returned no answer. Try again."
+        "agent_failed" -> "Something went wrong: " + response.optString("detail", "").take(160)
+        else -> "VIX AI error ($code)."
     }
 
     // ----------------------------------------------------------
