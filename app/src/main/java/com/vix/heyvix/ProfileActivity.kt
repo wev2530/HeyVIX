@@ -76,6 +76,10 @@ class ProfileActivity : Activity() {
     private var connModes: Map<String, String> = emptyMap()
     private var connLoaded = false
 
+    // Custom connectors (MCP addresses) the user added.
+    private var customList: List<AgentClient.Custom> = emptyList()
+    private lateinit var customBox: LinearLayout
+
     private var updating = false
     private var wakeNotifAsked = false
 
@@ -249,6 +253,14 @@ class ProfileActivity : Activity() {
             }
         }
 
+        // The custom connectors the user added are listed here.
+        customBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(customBox, LinearLayout.LayoutParams(matchParent, wrapContent))
+
+        addRow("Add custom connector", "Connect any MCP connector by its address") {
+            showCustomForm(null)
+        }
+
         // ---------- Account ----------
         addSection("Account")
 
@@ -322,6 +334,7 @@ class ProfileActivity : Activity() {
             if (isFinishing || isDestroyed) return@list
             if (out.ok) {
                 connModes = out.modes
+                customList = out.custom
                 connLoaded = true
             }
             renderConnections()
@@ -344,6 +357,110 @@ class ProfileActivity : Activity() {
                 else -> "Connected. VIX can only read."
             }
         }
+
+        // Custom connectors
+        customBox.removeAllViews()
+        for (c in customList) {
+            val where = if (c.host.isBlank()) "" else c.host + ". "
+            val what = when {
+                !hasOwnKey -> "Connected, but VIX only uses it with your own AI key."
+                c.mode == "write" -> "Can make changes, and asks you first."
+                else -> "Read only (only tools the connector marks as read-only)."
+            }
+            addRow(c.label, where + what, parent = customBox) { onCustomClicked(c) }
+        }
+    }
+
+    private fun onCustomClicked(c: AgentClient.Custom) {
+        val write = c.mode == "write"
+        val items = arrayOf(
+            "Update address or token",
+            if (write) "Switch to read only" else "Allow changes (it asks you first)",
+            "Disconnect"
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle(c.label)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showCustomForm(c)
+                    1 -> AgentClient.setMode(this, c.service, !write) { out ->
+                        onConnectionResult(out, "Updated.")
+                    }
+                    else -> confirmDisconnect(
+                        AgentClient.Service(c.service, c.label, "")
+                    )
+                }
+            }
+            .show()
+    }
+
+    /** Add a custom connector, or update one that already exists. */
+    private fun showCustomForm(existing: AgentClient.Custom?) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+        }
+
+        form.addView(
+            TextView(this).apply {
+                text = "Give it a name, then paste the connector's MCP address " +
+                    "(it starts with https). VIX will look for it and connect " +
+                    "before saving. The token is optional."
+                textSize = 13f
+                setPadding(0, 0, 0, dp(8))
+            }
+        )
+
+        val nameBox = EditText(this).apply {
+            hint = "Name, for example Notes"
+            inputType = InputType.TYPE_CLASS_TEXT
+            if (existing != null) {
+                setText(existing.label)
+                isEnabled = false
+            }
+        }
+        val urlBox = EditText(this).apply {
+            hint = "https://example.com/mcp"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        }
+        val tokenBox = EditText(this).apply {
+            hint = "Token (optional)"
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val writeBox = CheckBox(this).apply {
+            text = "Allow VIX to make changes (it always asks you first)"
+            isChecked = existing?.mode == "write"
+        }
+
+        form.addView(nameBox)
+        form.addView(urlBox)
+        form.addView(tokenBox)
+        form.addView(writeBox)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "Add custom connector" else "Update ${existing.label}")
+            .setView(form)
+            .setPositiveButton("Connect") { _, _ ->
+                val name = nameBox.text.toString().trim()
+                val url = urlBox.text.toString().trim()
+                val token = tokenBox.text.toString().trim()
+
+                when {
+                    name.isEmpty() -> toast("Nothing was saved. Enter a name.")
+                    !url.startsWith("https://", ignoreCase = true) ->
+                        toast("Nothing was saved. The address must start with https://")
+                    else -> {
+                        toast("Looking for the connector…")
+                        AgentClient.saveCustom(this, name, url, token, writeBox.isChecked) { out ->
+                            onConnectionResult(out, "$name connected.")
+                        }
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun onConnectionClicked(service: AgentClient.Service) {
@@ -440,6 +557,7 @@ class ProfileActivity : Activity() {
 
         if (out.ok) {
             connModes = out.modes
+            customList = out.custom
             connLoaded = true
             renderConnections()
         }
@@ -840,6 +958,7 @@ class ProfileActivity : Activity() {
         subtitle: String?,
         titleColor: Int = textColor,
         trailing: View? = null,
+        parent: LinearLayout? = null,
         onClick: (() -> Unit)? = null
     ): Row {
         val titleView = TextView(this).apply {
@@ -873,7 +992,7 @@ class ProfileActivity : Activity() {
             if (onClick != null) setOnClickListener { onClick() }
         }
 
-        content.addView(
+        (parent ?: content).addView(
             row,
             LinearLayout.LayoutParams(matchParent, wrapContent).apply {
                 bottomMargin = dp(6)
