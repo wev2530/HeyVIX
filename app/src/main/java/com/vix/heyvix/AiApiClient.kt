@@ -18,6 +18,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Talks to the AI provider the user picked: Google Gemini (with Google Search
@@ -506,11 +507,15 @@ class AiApiClient(context: Context) {
     private fun askApproval(items: List<Approval>): Map<String, Boolean> {
         val activity = activityRef?.get()
         if (activity == null || activity.isFinishing || activity.isDestroyed) {
-            return items.associate { it.id to false }
+            throw Exception(
+                "VIX needs your approval to make changes, and it can only ask in the " +
+                    "main VIX chat screen. Open the VIX app and ask there."
+            )
         }
 
         val latch = CountDownLatch(1)
         val allowed = HashMap<String, Boolean>()
+        val failed = AtomicBoolean(false)
 
         mainHandler.post {
             val text = items.joinToString("\n\n") {
@@ -532,11 +537,18 @@ class AiApiClient(context: Context) {
                     }
                     .show()
             } catch (e: Exception) {
+                failed.set(true)
                 latch.countDown()
             }
         }
 
         latch.await(180, TimeUnit.SECONDS)
+        if (failed.get()) {
+            throw Exception(
+                "VIX couldn't show the approval question. Open the main VIX chat screen " +
+                    "and try again."
+            )
+        }
         return items.associate { it.id to (allowed[it.id] == true) }
     }
 

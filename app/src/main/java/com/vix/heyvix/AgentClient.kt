@@ -30,11 +30,20 @@ object AgentClient {
 
     data class Resp(val status: Int, val json: JSONObject)
 
-    /** modes maps service id to "read" or "write". */
+    /** A custom connector (MCP address) the user added. service looks like "mcp:my-name". */
+    data class Custom(
+        val service: String,
+        val label: String,
+        val host: String,
+        val mode: String
+    )
+
+    /** modes maps service id to "read" or "write". custom lists the custom connectors. */
     data class Out(
         val ok: Boolean,
         val message: String,
-        val modes: Map<String, String> = emptyMap()
+        val modes: Map<String, String> = emptyMap(),
+        val custom: List<Custom> = emptyList()
     )
 
     val SERVICES: List<Service> = listOf(
@@ -133,6 +142,35 @@ object AgentClient {
         }
     }
 
+    /**
+     * Adds (or updates) a custom connector. The server looks for it at the
+     * address, connects, and only saves it if it answers like an MCP connector.
+     * The token is optional.
+     */
+    fun saveCustom(
+        context: Context,
+        name: String,
+        url: String,
+        token: String,
+        write: Boolean,
+        callback: (Out) -> Unit
+    ) {
+        val app = context.applicationContext
+        run(callback) {
+            val r = post(
+                app,
+                JSONObject()
+                    .put("action", "save_custom")
+                    .put("name", name)
+                    .put("url", url)
+                    .put("token", token)
+                    .put("mode", if (write) "write" else "read"),
+                60000
+            )
+            if (r.status in 200..299) fetchList(app) else Out(false, errorText(r.json))
+        }
+    }
+
     fun setMode(
         context: Context,
         service: String,
@@ -215,7 +253,26 @@ object AgentClient {
         val modes = parseModes(r.json)
         setCache(app, modes.keys)
         lastRefresh = System.currentTimeMillis()
-        return Out(true, "", modes)
+        return Out(true, "", modes, parseCustom(r.json))
+    }
+
+    private fun parseCustom(json: JSONObject): List<Custom> {
+        val out = ArrayList<Custom>()
+        val arr = json.optJSONArray("connections") ?: return out
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            val service = item.optString("service", "")
+            if (!service.startsWith("mcp:")) continue
+            out.add(
+                Custom(
+                    service,
+                    item.optString("label", "").ifBlank { service.removePrefix("mcp:") },
+                    item.optString("host", ""),
+                    item.optString("mode", "read")
+                )
+            )
+        }
+        return out
     }
 
     private fun parseModes(json: JSONObject): Map<String, String> {
@@ -239,6 +296,10 @@ object AgentClient {
             "not_signed_in", "http_401" -> "Please log in again."
             "bad_request" -> "Something is missing. Check the token and try again."
             "connections_failed" -> "The server couldn't save your connections. Try again."
+            "connector_failed" ->
+                "I couldn't connect to that connector. " +
+                    json.optString("detail", "").take(160)
+            "too_many_connectors" -> "You can add up to 5 custom connectors."
             else -> "Something went wrong ($code)."
         }
     }
