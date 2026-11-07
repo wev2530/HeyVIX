@@ -12,11 +12,14 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 
 /**
- * Talks to the Supabase Edge Function "vix-agent".
+ * Talks to the Supabase Edge Functions "vix-agent" and "vix-oauth".
  *
- * It manages the user's Connections (GitHub, Supabase, Webflow, Dropbox):
+ * vix-agent manages the user's Connections (GitHub, Supabase, Webflow, Dropbox):
  * the tokens are sent to the server, which checks them and keeps them
  * encrypted. They are never saved on this phone.
+ *
+ * vix-oauth lets the user sign in to those services in the browser instead of
+ * pasting a token, and renews tokens that are about to run out.
  *
  * It also makes the chat call that lets the AI use those tools. That call is
  * made by AiApiClient, and only when the user has saved their OWN AI key.
@@ -96,12 +99,20 @@ object AgentClient {
 
     /**
      * Updates the list of connected services if it has not been checked
-     * for 10 minutes. Blocking: call it from a background thread only.
+     * for 10 minutes. Also renews sign-in tokens that are about to run out
+     * (for example Dropbox). Blocking: call it from a background thread only.
      */
     fun refreshIfStale(context: Context) {
         val now = System.currentTimeMillis()
         if (now - lastRefresh < STALE_MS) return
         lastRefresh = now
+
+        // Renew sign-in tokens first, so the chat never uses an expired one.
+        try {
+            postTo(context, "vix-oauth", JSONObject().put("action", "refresh"), 30000)
+        } catch (_: Exception) {
+            // Not set up or no internet. The old token may still work.
+        }
 
         try {
             val r = post(context, JSONObject().put("action", "list"), 20000)
@@ -110,6 +121,81 @@ object AgentClient {
             }
         } catch (_: Exception) {
             // Keep the old list. The chat still works without the tools.
+        }
+    }
+
+    // ---------- sign in with the browser (OAuth) ----------
+
+    /**
+     * Asks the server which services have browser sign-in set up.
+     * The callback gets the service ids, for example "dropbox" and "github".
+     * An empty set means none (or the server could not be reached).
+     */
+    fun oauthProviders(context: Context, callback: (Set<String>) -> Unit) {
+        val app = context.applicationContext
+        executor.execute {
+            val found = HashSet<String>()
+            try {
+                val r = postTo(app, "vix-oauth", JSONObject().put("action", "providers"), 20000)
+                val arr = r.json.optJSONArray("services")
+                if (r.status in 200..299 && arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val id = arr.optString(i, "")
+                        if (id.isNotBlank()) found.add(id)
+                    }
+                }
+            } catch (_: Exception) {
+                // No sign-in buttons then. Pasting a token still works.
+            }
+            main.post { callback(found) }
+        }
+    }
+
+    /**
+     * Starts a browser sign-in. The callback gets the address to open in the
+     * browser, or null and a message when it could not be started.
+     */
+    fun oauthStart(
+        context: Context,
+        service: String,
+        write: Boolean,
+        callback: (String?, String) -> Unit
+    ) {
+        val app = context.applicationContext
+        executor.execute {
+            var url: String? = null
+            var message = ""
+
+            try {
+                val r = postTo(
+                    app,
+                    "vix-oauth",
+                    JSONObject()
+                        .put("action", "start")
+                        .put("service", service)
+                        .put("mode", if (write) "write" else "read"),
+                    30000
+                )
+                val u = r.json.optString("url", "")
+                if (r.status in 200..299 && u.startsWith("https://")) {
+                    url = u
+                } else {
+                    message = when (r.json.optString("error", "")) {
+                        "not_configured" ->
+                            "Sign-in isn't set up for this service on the server yet."
+                        "not_signed_in", "http_401" -> "Please log in again."
+                        else -> "I couldn't start the sign-in."
+                    }
+                }
+            } catch (e: UnknownHostException) {
+                message = "No internet connection."
+            } catch (e: SocketTimeoutException) {
+                message = "The server took too long. Please try again."
+            } catch (e: Exception) {
+                message = e.message ?: "Something went wrong."
+            }
+
+            main.post { callback(url, message) }
         }
     }
 
@@ -210,11 +296,15 @@ object AgentClient {
      * Never throws for a bad HTTP status: the answer always has an "error"
      * field then. Blocking: call it from a background thread only.
      */
-    fun post(context: Context, body: JSONObject, readMs: Int): Resp {
+    fun post(context: Context, body: JSONObject, readMs: Int): Resp =
+        postTo(context, "vix-agent", body, readMs)
+
+    /** The same as post, for any Edge Function (for example "vix-oauth"). */
+    fun postTo(context: Context, function: String, body: JSONObject, readMs: Int): Resp {
         val token = SupabaseAuth.accessToken(context.applicationContext)
             ?: throw Exception("Please log in again to use VIX AI.")
 
-        val c = URL(SupabaseConfig.URL + "/functions/v1/vix-agent")
+        val c = URL(SupabaseConfig.URL + "/functions/v1/" + function)
             .openConnection() as HttpURLConnection
         try {
             c.requestMethod = "POST"

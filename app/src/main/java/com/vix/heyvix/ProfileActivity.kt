@@ -76,6 +76,12 @@ class ProfileActivity : Activity() {
     private var connModes: Map<String, String> = emptyMap()
     private var connLoaded = false
 
+    // Services that have "Sign in" (browser login) set up on the server.
+    private var oauthServices: Set<String> = emptySet()
+
+    // True after the browser was opened for a sign-in: reload when we come back.
+    private var waitingSignIn = false
+
     // Custom connectors (MCP addresses) the user added.
     private var customList: List<AgentClient.Custom> = emptyList()
     private lateinit var customBox: LinearLayout
@@ -108,7 +114,15 @@ class ProfileActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (::content.isInitialized) refresh()
+        if (::content.isInitialized) {
+            refresh()
+
+            // Back from the browser after a sign-in: show what is connected now.
+            if (waitingSignIn) {
+                waitingSignIn = false
+                loadConnections()
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -339,6 +353,13 @@ class ProfileActivity : Activity() {
             }
             renderConnections()
         }
+
+        // Which services have "Sign in" (browser login) set up on the server.
+        AgentClient.oauthProviders(this) { services ->
+            if (isFinishing || isDestroyed) return@oauthProviders
+            oauthServices = services
+            renderConnections()
+        }
     }
 
     private fun renderConnections() {
@@ -347,8 +368,10 @@ class ProfileActivity : Activity() {
         for (service in AgentClient.SERVICES) {
             val row = connRows[service.id] ?: continue
             val mode = connModes[service.id]
+            val canSignIn = oauthServices.contains(service.id)
 
             row.subtitle.text = when {
+                mode == null && canSignIn -> "Not connected. Tap to sign in."
                 mode == null && connLoaded -> "Not connected. Tap to connect."
                 mode == null -> "Tap to connect."
                 !hasOwnKey ->
@@ -465,31 +488,100 @@ class ProfileActivity : Activity() {
 
     private fun onConnectionClicked(service: AgentClient.Service) {
         val mode = connModes[service.id]
+        val canSignIn = oauthServices.contains(service.id)
 
         if (mode == null) {
-            showConnectForm(service, false)
+            if (canSignIn) {
+                showSignInForm(service, false)
+            } else {
+                showConnectForm(service, false)
+            }
             return
         }
 
         val write = mode == "write"
-        val items = arrayOf(
-            "Change token",
-            if (write) "Switch to read only" else "Allow changes (it asks you first)",
-            "Disconnect"
-        )
+        val items = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+
+        if (canSignIn) {
+            items.add("Sign in again")
+            actions.add { showSignInForm(service, write) }
+        }
+
+        items.add("Change token")
+        actions.add { showConnectForm(service, write) }
+
+        items.add(if (write) "Switch to read only" else "Allow changes (it asks you first)")
+        actions.add {
+            AgentClient.setMode(this, service.id, !write) { out ->
+                onConnectionResult(out, "Updated.")
+            }
+        }
+
+        items.add("Disconnect")
+        actions.add { confirmDisconnect(service) }
 
         AlertDialog.Builder(this)
             .setTitle(service.label)
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> showConnectForm(service, write)
-                    1 -> AgentClient.setMode(this, service.id, !write) { out ->
-                        onConnectionResult(out, "Updated.")
-                    }
-                    else -> confirmDisconnect(service)
-                }
-            }
+            .setItems(items.toTypedArray()) { _, which -> actions[which]() }
             .show()
+    }
+
+    /** Sign in with the browser: no token to paste. */
+    private fun showSignInForm(service: AgentClient.Service, currentWrite: Boolean) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(4))
+        }
+
+        form.addView(
+            TextView(this).apply {
+                text = "You will sign in on the ${service.label} website, then come " +
+                    "back to VIX. No token to copy. Tokens renew by themselves " +
+                    "when the service allows it."
+                textSize = 13f
+                setPadding(0, 0, 0, dp(8))
+            }
+        )
+
+        val writeBox = CheckBox(this).apply {
+            text = "Allow VIX to make changes (it always asks you first)"
+            isChecked = currentWrite
+        }
+        form.addView(writeBox)
+
+        AlertDialog.Builder(this)
+            .setTitle("Connect ${service.label}")
+            .setView(form)
+            .setPositiveButton("Sign in") { _, _ ->
+                startSignIn(service, writeBox.isChecked)
+            }
+            .setNeutralButton("Use a token") { _, _ ->
+                showConnectForm(service, writeBox.isChecked)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun startSignIn(service: AgentClient.Service, write: Boolean) {
+        toast("Opening ${service.label}…")
+
+        AgentClient.oauthStart(this, service.id, write) { url, message ->
+            if (isFinishing || isDestroyed) return@oauthStart
+
+            if (url == null) {
+                toast(message)
+                return@oauthStart
+            }
+
+            waitingSignIn = true
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            } catch (e: Exception) {
+                waitingSignIn = false
+                toast("I couldn't open the browser.")
+            }
+        }
     }
 
     private fun showConnectForm(service: AgentClient.Service, currentWrite: Boolean) {
