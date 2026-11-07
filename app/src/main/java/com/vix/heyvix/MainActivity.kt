@@ -10,12 +10,15 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
+import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
@@ -29,6 +32,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicInteger
 
 class MainActivity : Activity() {
 
@@ -93,6 +98,11 @@ class MainActivity : Activity() {
     // The message being replied to, passed to the AI as context.
     private var replyContext: String? = null
 
+    // Files picked with "+" > "Attach a file", waiting for the next message.
+    private val attachments = ArrayList<AiApiClient.Attachment>()
+    private val attachCounter = AtomicInteger(0)
+    private lateinit var attachBar: LinearLayout
+
     // Saved chat state
     private class PendingSave(val role: String, val content: String, val quote: String?)
 
@@ -114,6 +124,12 @@ class MainActivity : Activity() {
         private const val CAMERA_PERMISSION_REQUEST = 1002
         private const val SCREEN_CAPTURE_REQUEST = 1003
         private const val NOTIFICATION_PERMISSION_REQUEST = 1004
+        private const val PICK_FILE_REQUEST = 1005
+
+        // Limits for files attached from the phone.
+        private const val MAX_FILES = 5
+        private const val MAX_FILE_BYTES = 4 * 1024 * 1024
+        private const val MAX_TOTAL_BYTES = 6 * 1024 * 1024
 
         // Same preference file and key the VIX overlay and profile page use.
         private const val MODE_PREFS = "vix_overlay"
@@ -283,6 +299,21 @@ class MainActivity : Activity() {
             }
         )
 
+        // "Attached files" bar, shown above the typing box after picking files.
+        attachBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(6), dp(6), dp(6))
+            background = rounded(Color.rgb(36, 36, 46), 14)
+            visibility = View.GONE
+        }
+
+        mainColumn.addView(
+            attachBar,
+            LinearLayout.LayoutParams(matchParent, wrapContent).apply {
+                topMargin = dp(8)
+            }
+        )
+
         // Message bar: + button, text box, mic, send
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -296,7 +327,7 @@ class MainActivity : Activity() {
             textSize = 26f
             setTextColor(textColor)
             gravity = Gravity.CENTER
-            contentDescription = "Quick commands"
+            contentDescription = "Quick commands and files"
             background = circle(Color.rgb(48, 48, 58))
             setOnClickListener { showPlusMenu() }
         }
@@ -718,6 +749,7 @@ class MainActivity : Activity() {
         pendingForward = null
         replyContext = null
         clearReply()
+        clearAttachments()
         resetAi()
         input.text.clear()
         conversation.removeAllViews()
@@ -743,6 +775,7 @@ class MainActivity : Activity() {
         pendingForward = null
         replyContext = null
         clearReply()
+        clearAttachments()
         resetAi()
 
         emptyShown = false
@@ -907,6 +940,7 @@ class MainActivity : Activity() {
             "📷   Open camera",
             "📸   Take a screenshot",
             "🎬   Start screen recording",
+            "📎   Attach a file",
             "🔍   Search the web"
         )
 
@@ -917,6 +951,7 @@ class MainActivity : Activity() {
                     1 -> quickSend("Open camera")
                     2 -> quickSend("Take a screenshot")
                     3 -> quickSend("Start screen recording")
+                    4 -> pickFile()
                     else -> {
                         input.setText("Search for ")
                         input.setSelection(input.text.length)
@@ -933,7 +968,226 @@ class MainActivity : Activity() {
             toast("Please wait for the current reply.")
             return
         }
+        if (attachments.isNotEmpty()) {
+            toast("Send or remove the attached files first.")
+            return
+        }
         sendUserText(command)
+    }
+
+    // ----------------------------------------------------------
+    // Attaching files (pictures, zip files, documents, anything)
+    // ----------------------------------------------------------
+
+    private fun pickFile() {
+        if (requestInProgress) {
+            toast("Please wait for the current reply.")
+            return
+        }
+
+        if (attachments.size >= MAX_FILES) {
+            toast("You can attach up to $MAX_FILES files at a time.")
+            return
+        }
+
+        val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }
+
+        try {
+            startActivityForResult(pick, PICK_FILE_REQUEST)
+        } catch (e: Exception) {
+            toast("I couldn't open the file picker.")
+        }
+    }
+
+    /** Reads the picked files on a background thread, then shows them above the typing box. */
+    private fun addPickedFiles(data: Intent) {
+        val uris = ArrayList<Uri>()
+        val clip = data.clipData
+        if (clip != null) {
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i).uri?.let { uris.add(it) }
+            }
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+
+        if (uris.isEmpty()) return
+
+        status.text = "READING FILE…"
+
+        val resolver = contentResolver
+        var count = attachments.size
+        var total = 0
+        for (a in attachments) total += a.size
+
+        Thread {
+            val added = ArrayList<AiApiClient.Attachment>()
+            val skipped = ArrayList<String>()
+
+            for (uri in uris) {
+                var name = "file"
+                var declared = -1L
+
+                try {
+                    resolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val n = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (n >= 0) cursor.getString(n)?.let { name = it }
+                            val s = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (s >= 0 && !cursor.isNull(s)) declared = cursor.getLong(s)
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Keep the default name.
+                }
+
+                name = name.replace('/', '_').replace('\\', '_')
+
+                if (count >= MAX_FILES) {
+                    skipped.add("$name (more than $MAX_FILES files)")
+                    continue
+                }
+
+                if (declared > MAX_FILE_BYTES) {
+                    skipped.add("$name (over 4 MB)")
+                    continue
+                }
+
+                val bytes = try {
+                    readLimited(uri, MAX_FILE_BYTES)
+                } catch (e: Exception) {
+                    null
+                }
+
+                if (bytes == null) {
+                    skipped.add("$name (over 4 MB or can't be read)")
+                    continue
+                }
+
+                if (total + bytes.size > MAX_TOTAL_BYTES) {
+                    skipped.add("$name (together over 6 MB)")
+                    continue
+                }
+
+                val mime = resolver.getType(uri) ?: "application/octet-stream"
+
+                added.add(
+                    AiApiClient.Attachment(
+                        "a" + attachCounter.incrementAndGet(),
+                        name,
+                        mime,
+                        bytes.size,
+                        Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    )
+                )
+                count++
+                total += bytes.size
+            }
+
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+
+                attachments.addAll(added)
+                renderAttachments()
+                status.text = "YOUR PERSONAL ASSISTANT"
+
+                if (skipped.isNotEmpty()) {
+                    Toast.makeText(
+                        this,
+                        "Not attached: " + skipped.joinToString(", "),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+
+                if (added.isNotEmpty()) {
+                    input.requestFocus()
+                    showKeyboard()
+                }
+            }
+        }.start()
+    }
+
+    /** Reads a picked file. Returns null when it is bigger than the limit. */
+    private fun readLimited(uri: Uri, limit: Int): ByteArray? {
+        val stream = contentResolver.openInputStream(uri) ?: return null
+
+        stream.use { source ->
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(16 * 1024)
+
+            while (true) {
+                val n = source.read(buffer)
+                if (n < 0) break
+                out.write(buffer, 0, n)
+                if (out.size() > limit) return null
+            }
+
+            return out.toByteArray()
+        }
+    }
+
+    private fun clearAttachments() {
+        attachments.clear()
+        renderAttachments()
+    }
+
+    /** Shows the attached files above the typing box, each with an ✕ to remove it. */
+    private fun renderAttachments() {
+        if (!::attachBar.isInitialized) return
+
+        attachBar.removeAllViews()
+
+        if (attachments.isEmpty()) {
+            attachBar.visibility = View.GONE
+            updateInputHint()
+            return
+        }
+
+        attachBar.visibility = View.VISIBLE
+
+        for (file in ArrayList(attachments)) {
+            val label = TextView(this).apply {
+                text = "📎  ${file.name}  ·  ${sizeText(file.size)}"
+                textSize = 13f
+                setTextColor(textColor)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+
+            val remove = TextView(this).apply {
+                text = "✕"
+                textSize = 16f
+                setTextColor(mutedColor)
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                contentDescription = "Remove ${file.name}"
+                setOnClickListener {
+                    attachments.remove(file)
+                    renderAttachments()
+                }
+            }
+
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            row.addView(label, LinearLayout.LayoutParams(0, wrapContent, 1f))
+            row.addView(remove)
+
+            attachBar.addView(row, LinearLayout.LayoutParams(matchParent, wrapContent))
+        }
+
+        updateInputHint()
+    }
+
+    private fun sizeText(bytes: Int): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        else -> "%.1f MB".format(bytes / 1048576.0)
     }
 
     // ----------------------------------------------------------
@@ -950,6 +1204,7 @@ class MainActivity : Activity() {
         if (!::input.isInitialized) return
 
         input.hint = when {
+            attachments.isNotEmpty() -> "Say where to put the file..."
             replyingTo != null -> "Type your reply..."
             isAiMode() -> "Message VIX AI..."
             else -> "Say a phone command..."
@@ -1107,7 +1362,13 @@ class MainActivity : Activity() {
         val command = input.text.toString().trim()
 
         if (command.isEmpty()) {
-            toast("Type a message first.")
+            toast(
+                if (attachments.isNotEmpty()) {
+                    "Say where to put the file first."
+                } else {
+                    "Type a message first."
+                }
+            )
             return
         }
 
@@ -1185,11 +1446,57 @@ class MainActivity : Activity() {
     /** Shows the user's message, saves it, and handles it. */
     private fun sendUserText(text: String) {
         val quote = replyingTo
-        addMessage(text, true, quote)
-        persist("user", text, quote)
+        val files = ArrayList(attachments)
+
+        // Files picked with "+" go along with this message.
+        val shown = if (files.isEmpty()) {
+            text
+        } else {
+            text + "\n\n" + files.joinToString("\n") {
+                "📎 ${it.name} (${sizeText(it.size)})"
+            }
+        }
+
+        addMessage(shown, true, quote)
+        persist("user", shown, quote)
         replyContext = quote
         clearReply()
+
+        if (files.isNotEmpty()) {
+            clearAttachments()
+            handleFileMessage(text, files)
+            return
+        }
+
         handleCommand(text)
+    }
+
+    /**
+     * A message with attached files always goes to the AI (never to the local
+     * commands), because only the AI with a connection can upload them.
+     */
+    private fun handleFileMessage(text: String, files: List<AiApiClient.Attachment>) {
+        if (!isAiMode()) {
+            showReply(
+                "VIX AI is off, so I can't upload files. Switch it on and try again.",
+                false,
+                true
+            )
+            return
+        }
+
+        if (!AiApiClient.hasKey(this)) {
+            showReply(
+                "To upload files I need your own AI key (Profile, Keys) and a " +
+                    "connected GitHub or Dropbox (Profile, Connections).",
+                false,
+                true
+            )
+            return
+        }
+
+        status.text = "WORKING…"
+        sendToAi(text, allowSearch = false, files = files)
     }
 
     private fun setupVoice() {
@@ -1296,8 +1603,8 @@ class MainActivity : Activity() {
             showDeveloperCard()
             return
         }
-        
-                // "List commands" / "What can you do": answered here, in both modes.
+
+        // "List commands" / "What can you do": answered here, in both modes.
         if (CommandList.isAsking(rawCommand)) {
             val list = CommandList.message()
             addMessage(list, false)
@@ -1368,8 +1675,13 @@ class MainActivity : Activity() {
     /**
      * Sends one message to the AI and shows the reply.
      * allowSearch = false forces web search off for this one message.
+     * files = attached files that go along with this message.
      */
-    private fun sendToAi(text: String, allowSearch: Boolean = true) {
+    private fun sendToAi(
+        text: String,
+        allowSearch: Boolean = true,
+        files: List<AiApiClient.Attachment> = emptyList()
+    ) {
         requestInProgress = true
 
         status.text = "YOUR PERSONAL ASSISTANT"
@@ -1384,7 +1696,7 @@ class MainActivity : Activity() {
             text
         }
 
-        aiApiClient.sendMessage(outgoing, allowSearch) { aiResult ->
+        aiApiClient.sendMessage(outgoing, allowSearch, files) { aiResult ->
             if (isFinishing || isDestroyed) {
                 return@sendMessage
             }
@@ -1609,6 +1921,14 @@ class MainActivity : Activity() {
         data: Intent?
     ) {
         super.onActivityResult(requestCode, resultCode, data)
+
+        // A file was picked with "+" > "Attach a file".
+        if (requestCode == PICK_FILE_REQUEST) {
+            if (resultCode == RESULT_OK && data != null) {
+                addPickedFiles(data)
+            }
+            return
+        }
 
         if (requestCode != SCREEN_CAPTURE_REQUEST) {
             return

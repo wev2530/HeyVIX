@@ -39,6 +39,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    AI use those services as tools, with the user's own key for that one
  *    request. Anything that changes something asks the user first.
  *
+ * Files attached on the phone (pictures, zip files, documents) only work in
+ * way 3: they travel with the vix-agent request, and the server uploads them
+ * as they are to GitHub or Dropbox when the AI is asked to.
+ *
  * Users add their own key on the profile page (Keys, AI key) or type
  * "/key AIza..." in the chat. "/key openai sk-..." picks another provider.
  *
@@ -55,6 +59,18 @@ class AiApiClient(context: Context) {
     data class Result(
         val successful: Boolean,
         val message: String
+    )
+
+    /**
+     * A file the user attached on the phone. base64 holds the file as it is
+     * (no changes), so a picture or zip file arrives on the server intact.
+     */
+    class Attachment(
+        val id: String,
+        val name: String,
+        val mime: String,
+        val size: Int,
+        val base64: String
     )
 
     /**
@@ -271,15 +287,18 @@ class AiApiClient(context: Context) {
     /**
      * allowSearch = false forces web search off for this one call,
      * even if the web search switch is on.
+     * attachments = files picked on the phone for this message (needs your own
+     * key and a connection, otherwise a clear message is returned).
      */
     fun sendMessage(
         message: String,
         allowSearch: Boolean = true,
+        attachments: List<Attachment> = emptyList(),
         callback: (Result) -> Unit
     ) {
         executor.execute {
             val result = try {
-                ask(message, allowSearch)
+                ask(message, allowSearch, attachments)
             } catch (e: Exception) {
                 Result(false, "VIX AI connection error: " + describe(e))
             }
@@ -324,22 +343,40 @@ class AiApiClient(context: Context) {
         }
     }
 
-    private fun ask(message: String, allowSearch: Boolean): Result {
+    private fun ask(
+        message: String,
+        allowSearch: Boolean,
+        attachments: List<Attachment>
+    ): Result {
         val key = apiKey()
         val provider = currentProvider(appContext)
         val systemPrompt = config.optString("system_prompt", DEFAULT_SYSTEM).ifBlank { DEFAULT_SYSTEM }
         val timeoutMs = config.optInt("timeout_seconds", 60) * 1000
 
         val text = if (key.isBlank()) {
+            if (attachments.isNotEmpty()) {
+                throw Exception(
+                    "To upload files I need your own AI key. Add it in Profile, Keys, " +
+                        "and connect GitHub or Dropbox in Profile, Connections."
+                )
+            }
+
             // No own key: the server holds the shared default key (no tools).
             askViaServer(message, allowSearch, timeoutMs)
         } else {
             // Own key: tools from Connections are used when there are any.
             AgentClient.refreshIfStale(appContext)
             val viaAgent = if (AgentClient.hasConnections(appContext)) {
-                askViaAgent(key, provider, message, timeoutMs)
+                askViaAgent(key, provider, message, timeoutMs, attachments)
             } else {
                 null
+            }
+
+            if (viaAgent == null && attachments.isNotEmpty()) {
+                throw Exception(
+                    "To upload files, connect GitHub or Dropbox first. " +
+                        "Open Profile, Connections."
+                )
             }
 
             viaAgent ?: when (provider.kind) {
@@ -431,26 +468,58 @@ class AiApiClient(context: Context) {
     /**
      * Returns the answer, or null when the server says there are no
      * connections (then the normal direct call is used instead).
+     *
+     * attachments are sent with the first request AND again with every
+     * re-send after an approval, because the server keeps nothing between steps.
      */
     private fun askViaAgent(
         key: String,
         provider: Provider,
         message: String,
-        timeoutMs: Int
+        timeoutMs: Int,
+        attachments: List<Attachment>
     ): String? {
+        // Tell the AI which files came with this message (the file data itself
+        // goes in the separate "attachments" field).
+        val note = if (attachments.isEmpty()) {
+            ""
+        } else {
+            "\n\n[Files attached on the phone. Upload them only if I ask you to, " +
+                "using the attachment id: " +
+                attachments.joinToString("; ") {
+                    "id=${it.id} name=${it.name} type=${it.mime} size=${it.size} bytes"
+                } + "]"
+        }
+
         val messages = JSONArray()
         for ((role, text) in history) {
             messages.put(JSONObject().put("role", role).put("text", text))
         }
-        messages.put(JSONObject().put("role", "user").put("text", message))
+        messages.put(JSONObject().put("role", "user").put("text", message + note))
+
+        val files = JSONArray()
+        for (a in attachments) {
+            files.put(
+                JSONObject()
+                    .put("id", a.id)
+                    .put("name", a.name)
+                    .put("mime", a.mime)
+                    .put("size", a.size)
+                    .put("data", a.base64)
+            )
+        }
 
         // The same fields go with every step of this one request.
-        fun common(): JSONObject = JSONObject()
-            .put("action", "chat")
-            .put("provider", provider.id)
-            .put("key", key)
-            .put("model", currentModel(appContext))
-            .put("base", if (provider.id == "custom") currentBase(appContext) else "")
+        fun common(): JSONObject {
+            val o = JSONObject()
+                .put("action", "chat")
+                .put("provider", provider.id)
+                .put("key", key)
+                .put("model", currentModel(appContext))
+                .put("base", if (provider.id == "custom") currentBase(appContext) else "")
+            if (files.length() > 0) o.put("attachments", files)
+            return o
+        }
 
         var body = common().put("messages", messages)
         val readMs = maxOf(timeoutMs, 130000)
@@ -565,6 +634,7 @@ class AiApiClient(context: Context) {
         "timeout" -> "That took too long. Try a simpler request."
         "empty_answer" -> "VIX AI returned no answer. Try again."
         "agent_failed" -> "Something went wrong: " + response.optString("detail", "").take(160)
+        "http_413" -> "Those files are too big to send. Try smaller files."
         else -> "VIX AI error ($code)."
     }
 
