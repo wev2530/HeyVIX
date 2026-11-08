@@ -103,6 +103,14 @@ class MainActivity : Activity() {
     private val attachCounter = AtomicInteger(0)
     private lateinit var attachBar: LinearLayout
 
+    // Read aloud buttons (▶ / ■) under each VIX reply.
+    // readingButton: the button of the reply being read out loud right now.
+    // pendingReadButton: the button of the reply that is about to start.
+    // lastPlayButton: the button of the bubble that was added last.
+    private var readingButton: TextView? = null
+    private var pendingReadButton: TextView? = null
+    private var lastPlayButton: TextView? = null
+
     // Saved chat state
     private class PendingSave(val role: String, val content: String, val quote: String?)
 
@@ -130,6 +138,10 @@ class MainActivity : Activity() {
         private const val MAX_FILES = 3
         private const val MAX_FILE_BYTES = 3 * 1024 * 1024
         private const val MAX_TOTAL_BYTES = 5 * 1024 * 1024
+
+        // Text of the read aloud button.
+        private const val READ_LABEL = "▶  Read aloud"
+        private const val STOP_LABEL = "■  Stop"
 
         // Same preference file and key the VIX overlay and profile page use.
         private const val MODE_PREFS = "vix_overlay"
@@ -223,6 +235,13 @@ class MainActivity : Activity() {
             setTextColor(mutedColor)
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, dp(6))
+
+            // Tap the status line while VIX is speaking to stop it.
+            setOnClickListener {
+                if (::speechOutput.isInitialized && text == "VIX AI IS SPEAKING…") {
+                    speechOutput.stop()
+                }
+            }
         }
         mainColumn.addView(status)
 
@@ -748,6 +767,7 @@ class MainActivity : Activity() {
         pendingSaves.clear()
         pendingForward = null
         replyContext = null
+        stopReading()
         clearReply()
         clearAttachments()
         resetAi()
@@ -774,6 +794,7 @@ class MainActivity : Activity() {
         pendingSaves.clear()
         pendingForward = null
         replyContext = null
+        stopReading()
         clearReply()
         clearAttachments()
         resetAi()
@@ -811,7 +832,12 @@ class MainActivity : Activity() {
             if (list.isEmpty()) showEmptyState()
 
             for (m in list) {
-                addMessage(m.content, m.role == "user", m.quote)
+                addMessage(
+                    m.content,
+                    m.role == "user",
+                    m.quote,
+                    readAloud = m.role != "user"
+                )
             }
 
             // Let the AI continue from what was said before in this chat.
@@ -1231,20 +1257,60 @@ class MainActivity : Activity() {
     }
 
     // ----------------------------------------------------------
+    // Read aloud buttons (▶ Read aloud / ■ Stop)
+    // ----------------------------------------------------------
+
+    /** Tap ▶ to read this reply out loud. Tap ■ to stop. */
+    private fun onReadAloudClicked(button: TextView, message: String) {
+        if (!::speechOutput.isInitialized) return
+
+        if (readingButton === button) {
+            // This reply is being read right now: stop it.
+            speechOutput.stop()
+            return
+        }
+
+        // Start this reply (any other reply being read is replaced).
+        pendingReadButton = button
+        speechOutput.speak(message)
+    }
+
+    private fun setReadButton(button: TextView?, reading: Boolean) {
+        button?.text = if (reading) STOP_LABEL else READ_LABEL
+        button?.setTextColor(if (reading) redColor else mutedColor)
+        button?.contentDescription =
+            if (reading) "Stop reading aloud" else "Read this reply aloud"
+    }
+
+    /** Stops any reading and puts every button back to ▶. */
+    private fun stopReading() {
+        pendingReadButton = null
+        if (::speechOutput.isInitialized) speechOutput.stop()
+        setReadButton(readingButton, false)
+        readingButton = null
+    }
+
+    // ----------------------------------------------------------
     // Chat bubbles
     // ----------------------------------------------------------
 
-    /** Adds a chat bubble. Swipe it right to reply. quote = the message replied to. */
+    /**
+     * Adds a chat bubble. Swipe it right to reply. quote = the message replied to.
+     * readAloud = true adds the ▶ Read aloud button under the message.
+     */
     private fun addMessage(
         message: String,
         fromUser: Boolean,
-        quote: String? = null
+        quote: String? = null,
+        readAloud: Boolean = false
     ) {
         // The first real message replaces the greeting and suggestions.
         if (emptyShown) {
             emptyShown = false
             conversation.removeAllViews()
         }
+
+        lastPlayButton = null
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1279,6 +1345,19 @@ class MainActivity : Activity() {
             }
         )
 
+        if (readAloud && message.isNotBlank()) {
+            val play = TextView(this).apply {
+                text = READ_LABEL
+                textSize = 12f
+                setTextColor(mutedColor)
+                setPadding(0, dp(10), dp(16), dp(4))
+                contentDescription = "Read this reply aloud"
+                setOnClickListener { onReadAloudClicked(this, message) }
+            }
+            content.addView(play, LinearLayout.LayoutParams(wrapContent, wrapContent))
+            lastPlayButton = play
+        }
+
         val line = SwipeReplyLayout(this) { startReply(message) }.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = if (fromUser) Gravity.END else Gravity.START
@@ -1312,6 +1391,7 @@ class MainActivity : Activity() {
         conversation.addView(holder)
         scrollToBottom()
 
+        pendingReadButton = null
         speechOutput.speak(DeveloperInfo.spokenMessage())
     }
 
@@ -1544,9 +1624,20 @@ class MainActivity : Activity() {
             this,
             { speaking ->
                 if (speaking) {
+                    // The reply that was waiting to start is the one being read now.
+                    val next = pendingReadButton
+                    if (next != null) {
+                        pendingReadButton = null
+                        readingButton = next
+                    }
+                    setReadButton(readingButton, true)
                     status.text = "VIX AI IS SPEAKING…"
-                } else if (status.text == "VIX AI IS SPEAKING…") {
-                    status.text = "YOUR PERSONAL ASSISTANT"
+                } else {
+                    setReadButton(readingButton, false)
+                    readingButton = null
+                    if (status.text == "VIX AI IS SPEAKING…") {
+                        status.text = "YOUR PERSONAL ASSISTANT"
+                    }
                 }
             },
             { message -> toast(message) }
@@ -1607,9 +1698,10 @@ class MainActivity : Activity() {
         // "List commands" / "What can you do": answered here, in both modes.
         if (CommandList.isAsking(rawCommand)) {
             val list = CommandList.message()
-            addMessage(list, false)
+            addMessage(list, false, null, readAloud = true)
             persist("assistant", list, null)
             status.text = "DONE"
+            pendingReadButton = lastPlayButton
             speechOutput.speak(CommandList.spokenMessage())
             return
         }
@@ -1733,12 +1825,14 @@ class MainActivity : Activity() {
         speak: Boolean,
         save: Boolean = false
     ) {
-        addMessage(message, false)
+        addMessage(message, false, null, readAloud = true)
         if (save) persist("assistant", message, null)
 
         status.text = if (speak) "DONE" else "NEEDS ATTENTION"
 
         if (speak) {
+            // The button of this reply shows ■ Stop while it is read out loud.
+            pendingReadButton = lastPlayButton
             speechOutput.speak(message)
         }
     }
@@ -1987,6 +2081,7 @@ class MainActivity : Activity() {
         // The voice or speed may have changed on the profile page.
         if (speechNeedsRefresh) {
             speechNeedsRefresh = false
+            stopReading()
             speechOutput.shutdown()
             speechOutput = createSpeechOutput()
         }
