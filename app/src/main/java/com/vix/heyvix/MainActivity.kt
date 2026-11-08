@@ -126,10 +126,10 @@ class MainActivity : Activity() {
         private const val NOTIFICATION_PERMISSION_REQUEST = 1004
         private const val PICK_FILE_REQUEST = 1005
 
-        // Limits for files attached from the phone.
-        private const val MAX_FILES = 5
-        private const val MAX_FILE_BYTES = 4 * 1024 * 1024
-        private const val MAX_TOTAL_BYTES = 6 * 1024 * 1024
+        // Limits for files attached from the phone. They match the server (vix-agent).
+        private const val MAX_FILES = 3
+        private const val MAX_FILE_BYTES = 3 * 1024 * 1024
+        private const val MAX_TOTAL_BYTES = 5 * 1024 * 1024
 
         // Same preference file and key the VIX overlay and profile page use.
         private const val MODE_PREFS = "vix_overlay"
@@ -1053,7 +1053,7 @@ class MainActivity : Activity() {
                 }
 
                 if (declared > MAX_FILE_BYTES) {
-                    skipped.add("$name (over 4 MB)")
+                    skipped.add("$name (over 3 MB)")
                     continue
                 }
 
@@ -1064,12 +1064,12 @@ class MainActivity : Activity() {
                 }
 
                 if (bytes == null) {
-                    skipped.add("$name (over 4 MB or can't be read)")
+                    skipped.add("$name (over 3 MB or can't be read)")
                     continue
                 }
 
                 if (total + bytes.size > MAX_TOTAL_BYTES) {
-                    skipped.add("$name (together over 6 MB)")
+                    skipped.add("$name (together over 5 MB)")
                     continue
                 }
 

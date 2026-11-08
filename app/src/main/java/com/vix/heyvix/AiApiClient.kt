@@ -40,8 +40,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  *    request. Anything that changes something asks the user first.
  *
  * Files attached on the phone (pictures, zip files, documents) only work in
- * way 3: they travel with the vix-agent request, and the server uploads them
- * as they are to GitHub or Dropbox when the AI is asked to.
+ * way 3: they travel with the vix-agent request (field "attachments", each
+ * with name, mime and b64), and the server uploads them as they are to GitHub
+ * or Dropbox when the AI is asked to. The server numbers the files itself
+ * (f1, f2, f3) and tells the AI about them, so this app adds nothing to the
+ * message text. Limits (same as the server): 3 files, 3 MB each, 5 MB total.
  *
  * Users add their own key on the profile page (Keys, AI key) or type
  * "/key AIza..." in the chat. "/key openai sk-..." picks another provider.
@@ -479,33 +482,21 @@ class AiApiClient(context: Context) {
         timeoutMs: Int,
         attachments: List<Attachment>
     ): String? {
-        // Tell the AI which files came with this message (the file data itself
-        // goes in the separate "attachments" field).
-        val note = if (attachments.isEmpty()) {
-            ""
-        } else {
-            "\n\n[Files attached on the phone. Upload them only if I ask you to, " +
-                "using the attachment id: " +
-                attachments.joinToString("; ") {
-                    "id=${it.id} name=${it.name} type=${it.mime} size=${it.size} bytes"
-                } + "]"
-        }
-
         val messages = JSONArray()
         for ((role, text) in history) {
             messages.put(JSONObject().put("role", role).put("text", text))
         }
-        messages.put(JSONObject().put("role", "user").put("text", message + note))
+        messages.put(JSONObject().put("role", "user").put("text", message))
 
+        // The files themselves. The server numbers them f1, f2, f3 and tells the
+        // AI about them, so nothing is added to the message text here.
         val files = JSONArray()
         for (a in attachments) {
             files.put(
                 JSONObject()
-                    .put("id", a.id)
                     .put("name", a.name)
                     .put("mime", a.mime)
-                    .put("size", a.size)
-                    .put("data", a.base64)
+                    .put("b64", a.base64)
             )
         }
 
@@ -634,6 +625,8 @@ class AiApiClient(context: Context) {
         "timeout" -> "That took too long. Try a simpler request."
         "empty_answer" -> "VIX AI returned no answer. Try again."
         "agent_failed" -> "Something went wrong: " + response.optString("detail", "").take(160)
+        "attachments_invalid" ->
+            "I couldn't use the attached files: " + response.optString("detail", "").take(160)
         "http_413" -> "Those files are too big to send. Try smaller files."
         else -> "VIX AI error ($code)."
     }
