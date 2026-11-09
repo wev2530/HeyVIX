@@ -1,5 +1,7 @@
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
 import { SUPABASE_URL, SUPABASE_KEY, GEMINI_MODEL } from "./config.js";
+import { createConnections } from "./connections.js";
+import { showPrivacyNotice } from "./privacy.js";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
@@ -111,6 +113,15 @@ let emptyShown = false;
 let searchRefused = false;
 let installEvent = null;
 
+// Connections (GitHub, Supabase, Webflow, Dropbox, custom connectors). Same as the Android app.
+const connections = createConnections({
+  supabase,
+  $,
+  toast,
+  openSheet,
+  hasOwnKey: () => !!savedAi().key,
+});
+
 // ------------------------------------------------------------
 // Small helpers
 // ------------------------------------------------------------
@@ -181,7 +192,10 @@ function setAuthMsg(text, isError) {
 }
 
 function setAuthMode(mode, message, isError) {
+  const changed = mode !== authMode;
   authMode = mode;
+  // The tick box starts empty on every new page, like on Android.
+  if (changed) $("consent").checked = false;
 
   const titles = {
     login: ["Welcome back", "Log in to your VIX account"],
@@ -213,6 +227,10 @@ function setAuthMode(mode, message, isError) {
   $("link-forgot").classList.toggle("hidden", mode !== "login");
   $("or-row").classList.toggle("hidden", mode === "forgot" || mode === "newpassword");
   $("google").classList.toggle("hidden", mode === "forgot" || mode === "newpassword");
+  // Privacy: Sign up needs the tick box. Log in shows the short note instead.
+  $("consent-wrap").classList.toggle("hidden", mode !== "signup");
+  $("privacy-link").classList.toggle("hidden", mode !== "signup");
+  $("privacy-note").classList.toggle("hidden", mode !== "login");
 
   $("password").value = "";
   $("confirm").value = "";
@@ -270,6 +288,10 @@ async function authSubmit(event) {
       setAuthMsg("The two passwords don't match.", true);
       return;
     }
+  }
+  if (authMode === "signup" && !$("consent").checked) {
+    setAuthMsg("Please agree to the Privacy Notice to create an account.", true);
+    return;
   }
 
   setAuthMsg("", false);
@@ -330,6 +352,11 @@ async function authSubmit(event) {
 
 async function googleSignIn() {
   if (authBusy) return;
+  // Google sign-up also needs the tick box.
+  if (authMode === "signup" && !$("consent").checked) {
+    setAuthMsg("Please agree to the Privacy Notice first.", true);
+    return;
+  }
   const { error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: { redirectTo: SITE },
@@ -339,6 +366,9 @@ async function googleSignIn() {
 
 $("auth-form").addEventListener("submit", authSubmit);
 $("google").onclick = googleSignIn;
+$("privacy-link").onclick = showPrivacyNotice;
+$("privacy-note").onclick = showPrivacyNotice;
+$("privacy-row").onclick = showPrivacyNotice;
 $("link-forgot").onclick = () => setAuthMode("forgot");
 $("link-switch").onclick = () => {
   if (authMode === "login") setAuthMode("signup");
@@ -372,6 +402,7 @@ supabase.auth.onAuthStateChange((event, newSession) => {
       if (!recovering) enterApp();
     } else {
       appStarted = false;
+      connections.clearCache();
       showScreen("auth");
       setAuthMode("login");
     }
@@ -576,8 +607,15 @@ async function askAI(history, outgoing) {
   const search = localStorage.getItem(LS_SEARCH) === "1";
   const cfg = savedAi();
 
-  // No own key: the server holds the shared default key.
+  // No own key: the server holds the shared default key (no Connections tools).
   if (!cfg.key) return askViaServer(messages, search);
+
+  // Own key AND at least one connection: the AI can use those services as tools.
+  await connections.refreshIfStale();
+  if (connections.hasConnections()) {
+    const viaAgent = await connections.askViaAgent(cfg, messages, PROVIDERS[cfg.provider].model);
+    if (viaAgent !== null) return viaAgent;
+  }
 
   const kind = PROVIDERS[cfg.provider].kind;
   if (kind === "gemini") return askGeminiDirect(cfg, messages, search);
@@ -1027,6 +1065,7 @@ $("search").addEventListener("input", renderHistory);
 $("profile-row").onclick = () => {
   closeDrawer();
   showScreen("profile");
+  connections.loadProfile();
 };
 
 // ------------------------------------------------------------
@@ -1228,6 +1267,7 @@ $("key-save").onclick = () => {
   $("key-input").value = "";
   searchRefused = false;
   updateKeyStatus();
+  connections.render();
   toast("Saved in this browser.");
 };
 
@@ -1238,6 +1278,7 @@ $("key-remove").onclick = () => {
   $("model-input").value = "";
   $("base-input").value = "";
   updateKeyStatus();
+  connections.render();
   toast("Key removed.");
 };
 
