@@ -1,8 +1,10 @@
 package com.vix.heyvix
 
 import android.app.Activity
+import android.app.AlertDialog // PRIVACY
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList // PRIVACY
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -20,6 +22,7 @@ import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.CheckBox // PRIVACY
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -44,6 +47,9 @@ class AuthActivity : Activity() {
     private val textColor = Color.rgb(245, 245, 248)
     private val mutedColor = Color.rgb(165, 165, 175)
     private val greenColor = Color.rgb(68, 220, 130)
+
+    // PRIVACY: change this to the contact people should use to ask for deletion.
+    private val privacyContact = "gcvdesign@outlook.com"
 
     // Android's View class has no AUTOFILL_HINT_NEW_PASSWORD constant,
     // so use the standard hint string directly.
@@ -208,6 +214,7 @@ class AuthActivity : Activity() {
 
         addDivider()
         addGoogleButton()
+        addPrivacyNote() // PRIVACY
     }
 
     private fun renderLogin(info: String?, infoIsError: Boolean) {
@@ -245,6 +252,7 @@ class AuthActivity : Activity() {
 
         addDivider()
         addGoogleButton()
+        addPrivacyNote() // PRIVACY
 
         addLink("New to VIX? Sign up", false) {
             lastEmail = email.text.toString().trim()
@@ -266,9 +274,11 @@ class AuthActivity : Activity() {
         val password = addPasswordField("Password (at least 6 characters)", hintNewPassword)
         val confirm = addPasswordField("Confirm password", hintNewPassword)
 
+        val consent = addConsentBox() // PRIVACY
+
         val button = addButton("Sign up", true)
         button.setOnClickListener {
-            if (!busy) doSignup(email, password, confirm, message, button)
+            if (!busy) doSignup(email, password, confirm, consent, message, button) // PRIVACY
         }
 
         confirm.imeOptions = EditorInfo.IME_ACTION_DONE
@@ -282,7 +292,15 @@ class AuthActivity : Activity() {
         }
 
         addDivider()
-        addGoogleButton()
+        // PRIVACY: Google sign-up also needs the tick box.
+        addGoogleButton {
+            if (consent.isChecked) {
+                true
+            } else {
+                showError(message, "Please agree to the Privacy Notice first.")
+                false
+            }
+        }
 
         addLink("Already have an account? Log in", false) {
             lastEmail = email.text.toString().trim()
@@ -381,6 +399,7 @@ class AuthActivity : Activity() {
         email: EditText,
         password: EditText,
         confirm: EditText,
+        consent: CheckBox, // PRIVACY
         message: TextView,
         button: Button
     ) {
@@ -397,6 +416,11 @@ class AuthActivity : Activity() {
         }
         if (pass != confirm.text.toString()) {
             showError(message, "The two passwords don't match.")
+            return
+        }
+        // PRIVACY: consent is required before an account is created.
+        if (!consent.isChecked) {
+            showError(message, "Please agree to the Privacy Notice to create an account.")
             return
         }
 
@@ -489,6 +513,72 @@ class AuthActivity : Activity() {
     private fun goToMain() {
         startActivity(Intent(this, MainActivity::class.java))
         finish()
+    }
+
+    // ----------------------------------------------------------
+    // Privacy notice and consent  // PRIVACY (this whole section is new)
+    // ----------------------------------------------------------
+
+    private fun showPrivacyNotice() {
+        val notice =
+            "What we collect\n" +
+                "Your email (or Google account email), your chats and messages, and a " +
+                "daily message count.\n\n" +
+                "Why\n" +
+                "To sign you in, save your chat history on your phone and on the web, " +
+                "and apply a fair daily limit on the shared AI key.\n\n" +
+                "How it is protected\n" +
+                "Your data is stored in Supabase. Each account can only read and change " +
+                "its own chats. Connection tokens are stored encrypted. Your own AI key " +
+                "is saved on your device; if you use Connections, it is sent to our " +
+                "server only for that request.\n\n" +
+                "AI providers\n" +
+                "Your messages are sent to the AI provider that answers them (the shared " +
+                "service, or the provider whose key you added). Please do not share ID " +
+                "numbers, passwords or other sensitive details in chats.\n\n" +
+                "Your rights\n" +
+                "We do not sell your data. You can delete chats inside the app, and you " +
+                "can ask us to delete your account and all your data at any time: " +
+                privacyContact
+
+        AlertDialog.Builder(this)
+            .setTitle("Privacy Notice")
+            .setMessage(notice)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    /** Tick box on the Sign up page. Sign up and Google sign-up need it ticked. */
+    private fun addConsentBox(): CheckBox {
+        val box = CheckBox(this).apply {
+            text = "I agree to the Privacy Notice"
+            textSize = 14f
+            setTextColor(textColor)
+            buttonTintList = ColorStateList.valueOf(redColor)
+        }
+        content.addView(
+            box,
+            LinearLayout.LayoutParams(matchParent, wrapContent).apply {
+                topMargin = dp(10)
+            }
+        )
+        addLink("Read the Privacy Notice", false) { showPrivacyNotice() }
+        return box
+    }
+
+    /** Small line under the Google button on the Welcome and Log in pages. */
+    private fun addPrivacyNote() {
+        content.addView(
+            TextView(this).apply {
+                text = "By continuing you agree to the Privacy Notice (tap to read)"
+                textSize = 12f
+                setTextColor(mutedColor)
+                gravity = Gravity.CENTER
+                setPadding(dp(4), dp(10), dp(4), dp(4))
+                setOnClickListener { showPrivacyNotice() }
+            },
+            LinearLayout.LayoutParams(matchParent, wrapContent)
+        )
     }
 
     // ----------------------------------------------------------
@@ -659,8 +749,12 @@ class AuthActivity : Activity() {
         return button
     }
 
-    /** White "Continue with Google" button. */
-    private fun addGoogleButton() {
+    /**
+     * White "Continue with Google" button.
+     * PRIVACY: beforeStart (optional) can stop the sign-in, for example when
+     * the consent box on the Sign up page is not ticked.
+     */
+    private fun addGoogleButton(beforeStart: (() -> Boolean)? = null) {
         val label = SpannableString("G     Continue with Google")
         label.setSpan(
             ForegroundColorSpan(Color.rgb(66, 133, 244)),
@@ -677,7 +771,9 @@ class AuthActivity : Activity() {
             background = rounded(Color.WHITE, 26)
             text = label
             contentDescription = "Continue with Google"
-            setOnClickListener { startGoogleSignIn() }
+            setOnClickListener {
+                if (beforeStart == null || beforeStart()) startGoogleSignIn()
+            }
         }
 
         content.addView(
