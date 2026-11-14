@@ -112,6 +112,7 @@ PHONE COMMANDS (VIX AI on or off)
 • Turn on flashlight / Turn off flashlight (also: torch on, torch off)
 • Open camera (also: take a picture, take a photo, snap a picture)
 • Open [app name] (also: launch or start), for example: Open WhatsApp
+• Call mum (also: call my mother) or Call [contact name]
 • Take a screenshot (also: capture my screen)
 • Start screen recording (also: record my screen)
 • Stop screen recording (also: stop recording)
@@ -137,7 +138,7 @@ Anything else is sent to VIX AI when it is on. When VIX AI is off, I ask you fir
 
     /** Short version read aloud, so VIX does not read the whole list. */
     fun spokenMessage(): String =
-        "I can control your flashlight and camera, open apps, take " +
-            "screenshots, record your screen, search the web, and answer " +
-            "your questions. The full list of commands is on your screen."
+        "I can control your flashlight and camera, open apps, call your " +
+            "contacts, take screenshots, record your screen, search the web, " +
+            "and answer your questions. The full list of commands is on your screen."
 }

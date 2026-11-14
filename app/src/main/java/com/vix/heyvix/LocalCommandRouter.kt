@@ -95,6 +95,15 @@ class LocalCommandRouter(
             )
         }
 
+        // Phone calls: "call mum", "call my mother", "call John"
+        if (command in setOf("call", "phone", "dial", "ring")) {
+            return Result(true, "Who should I call?", false)
+        }
+        val callTarget = extractCallTarget(command)
+        if (callTarget != null) {
+            return callContact(callTarget)
+        }
+
         // Opening installed apps
         val appName = extractAppName(command)
         if (appName != null) {
@@ -200,6 +209,52 @@ class LocalCommandRouter(
         } catch (_: Exception) {
             Result(true, "I couldn't open the camera app.", false)
         }
+    }
+
+    /**
+     * "call mum", "call my mother", "can you call John", "make a call to Ada".
+     * Returns what comes after the word call, or null if this isn't a call command.
+     */
+    private fun extractCallTarget(command: String): String? {
+        var c = command
+            .removePrefix("can you ")
+            .removePrefix("could you ")
+            .trim()
+
+        if (c.startsWith("make a call to ")) {
+            return c.removePrefix("make a call to ").trim().ifBlank { null }
+        }
+
+        val prefixes = listOf("call ", "phone ", "ring ", "dial ")
+        val prefix = prefixes.firstOrNull { c.startsWith(it) } ?: return null
+        c = c.removePrefix(prefix).trim()
+        return c.ifBlank { null }
+    }
+
+    private fun callContact(target: String): Result {
+        // Contacts and phone permission are asked on an invisible screen,
+        // which then makes the call by itself.
+        if (!CallContact.hasPermissions(context)) {
+            return try {
+                val intent = Intent(context, PermissionActivity::class.java)
+                    .putExtra(PermissionActivity.EXTRA_CALL_NAME, target)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+                Result(
+                    true,
+                    "Allow contacts and phone access, then I'll make the call."
+                )
+            } catch (_: Exception) {
+                Result(
+                    true,
+                    "VIX needs contacts and phone permission to make calls. Please allow them in the app settings.",
+                    false
+                )
+            }
+        }
+
+        val outcome = CallContact.call(context, target)
+        return Result(true, outcome.message, outcome.ok)
     }
 
     private fun extractAppName(command: String): String? {
