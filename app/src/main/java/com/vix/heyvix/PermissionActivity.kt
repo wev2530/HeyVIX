@@ -2,17 +2,21 @@ package com.vix.heyvix
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.os.Bundle
 import android.widget.Toast
 
 /**
- * An invisible screen that asks for the contacts and phone permissions,
- * then makes the call VIX was asked to make.
+ * An invisible screen with two jobs:
+ * 1. Ask for the contacts and phone permissions, then make the call.
+ * 2. Show the list of matching contacts so the user can choose who to call.
  */
 class PermissionActivity : Activity() {
 
     companion object {
         const val EXTRA_CALL_NAME = "call_name"
+        const val EXTRA_CHOICE_NAMES = "choice_names"
+        const val EXTRA_CHOICE_NUMBERS = "choice_numbers"
         private const val REQUEST_CALL = 41
     }
 
@@ -20,6 +24,16 @@ class PermissionActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Several contacts matched: show the list.
+        val names = intent.getStringArrayExtra(EXTRA_CHOICE_NAMES)
+        val numbers = intent.getStringArrayExtra(EXTRA_CHOICE_NUMBERS)
+        if (names != null && numbers != null &&
+            names.isNotEmpty() && names.size == numbers.size
+        ) {
+            showChoices(names, numbers)
+            return
+        }
 
         callName = intent.getStringExtra(EXTRA_CALL_NAME).orEmpty()
         if (callName.isBlank()) {
@@ -64,6 +78,24 @@ class PermissionActivity : Activity() {
         val outcome = CallContact.call(this, callName)
         toast(outcome.message)
         finish()
+    }
+
+    private fun showChoices(names: Array<String>, numbers: Array<String>) {
+        val labels: Array<CharSequence> =
+            Array(names.size) { "${names[it]}\n${numbers[it]}" }
+
+        AlertDialog.Builder(this)
+            .setTitle("Who do you want to call?")
+            .setItems(labels) { _, which ->
+                val outcome = CallContact.dial(
+                    this,
+                    CallContact.Candidate(names[which], numbers[which])
+                )
+                if (!outcome.ok) toast(outcome.message)
+                finish()
+            }
+            .setOnCancelListener { finish() }
+            .show()
     }
 
     private fun toast(message: String) =
